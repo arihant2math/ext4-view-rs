@@ -17,6 +17,7 @@ use crate::resolve::FollowSymlinks;
 use crate::util::usize_from_u32;
 use core::fmt::{self, Debug, Formatter};
 
+use crate::iters::AsyncIterator;
 #[cfg(feature = "std")]
 use std::io::{self, ErrorKind, Read, Seek, SeekFrom};
 
@@ -39,8 +40,11 @@ pub struct File {
 
 impl File {
     /// Open the file at `path`.
-    pub(crate) fn open(fs: &Ext4, path: Path<'_>) -> Result<Self, Ext4Error> {
-        let inode = fs.path_to_inode(path, FollowSymlinks::All)?;
+    pub(crate) async fn open(
+        fs: &Ext4,
+        path: Path<'_>,
+    ) -> Result<Self, Ext4Error> {
+        let inode = fs.path_to_inode(path, FollowSymlinks::All).await?;
 
         if inode.metadata.is_dir() {
             return Err(Ext4Error::IsADirectory);
@@ -83,7 +87,7 @@ impl File {
     /// entire file.
     ///
     /// Returns `Ok(0)` if the end of the file has been reached.
-    pub fn read_bytes(
+    pub async fn read_bytes(
         &mut self,
         mut buf: &mut [u8],
     ) -> Result<usize, Ext4Error> {
@@ -129,7 +133,7 @@ impl File {
             // OK to unwrap: already checked that the position is not at
             // the end of the file, so there must be at least one more
             // block to read.
-            let block_index = self.file_blocks.next().unwrap()?;
+            let block_index = self.file_blocks.next().await.unwrap()?;
 
             self.block_index = Some(block_index);
 
@@ -172,7 +176,8 @@ impl File {
             buf.fill(0);
         } else {
             self.fs
-                .read_from_block(block_index, offset_within_block, buf)?;
+                .read_from_block(block_index, offset_within_block, buf)
+                .await?;
         }
 
         // OK to unwrap: reads don't extend past a block, so this is at
@@ -205,7 +210,7 @@ impl File {
     /// Seek from the start of the file to `position`.
     ///
     /// Seeking past the end of the file is allowed.
-    pub fn seek_to(&mut self, position: u64) -> Result<(), Ext4Error> {
+    pub async fn seek_to(&mut self, position: u64) -> Result<(), Ext4Error> {
         // Reset iteration.
         self.file_blocks = FileBlocks::new(self.fs.clone(), &self.inode)?;
         self.block_index = None;
@@ -214,7 +219,7 @@ impl File {
         // `position`.
         let num_blocks = position / self.fs.0.superblock.block_size.to_nz_u64();
         for _ in 0..num_blocks {
-            self.file_blocks.next();
+            self.file_blocks.next().await;
         }
 
         self.position = position;
@@ -233,41 +238,5 @@ impl Debug for File {
             // Don't show all fields, as that would make the output less
             // readable.
             .finish_non_exhaustive()
-    }
-}
-
-#[cfg(feature = "std")]
-impl Read for File {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        Ok(self.read_bytes(buf)?)
-    }
-}
-
-#[cfg(feature = "std")]
-impl Seek for File {
-    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        let pos = match pos {
-            SeekFrom::Start(pos) => pos,
-            SeekFrom::End(offset) => {
-                // file_size + offset:
-                i64::try_from(self.inode.metadata.size_in_bytes)
-                    .ok()
-                    .and_then(|pos| pos.checked_add(offset))
-                    .and_then(|pos| pos.try_into().ok())
-                    .ok_or(ErrorKind::InvalidInput)?
-            }
-            SeekFrom::Current(offset) => {
-                // current_pos + offset:
-                i64::try_from(self.position)
-                    .ok()
-                    .and_then(|pos| pos.checked_add(offset))
-                    .and_then(|pos| pos.try_into().ok())
-                    .ok_or(ErrorKind::InvalidInput)?
-            }
-        };
-
-        self.seek_to(pos)?;
-
-        Ok(self.position)
     }
 }

@@ -213,7 +213,7 @@ impl Inode {
     }
 
     /// Read an inode.
-    pub(crate) fn read(
+    pub(crate) async fn read(
         ext4: &Ext4,
         inode: InodeIndex,
     ) -> Result<Self, Ext4Error> {
@@ -221,7 +221,8 @@ impl Inode {
             get_inode_location(ext4, inode)?;
 
         let mut data = vec![0; usize::from(ext4.0.superblock.inode_size)];
-        ext4.read_from_block(block_index, offset_within_block, &mut data)?;
+        ext4.read_from_block(block_index, offset_within_block, &mut data)
+            .await?;
 
         let (inode, expected_checksum) = Self::from_bytes(ext4, inode, &data)?;
 
@@ -259,7 +260,7 @@ impl Inode {
         Ok(inode)
     }
 
-    pub(crate) fn symlink_target(
+    pub(crate) async fn symlink_target(
         &self,
         ext4: &Ext4,
     ) -> Result<PathBuf, Ext4Error> {
@@ -284,7 +285,7 @@ impl Inode {
             PathBuf::try_from(target)
                 .map_err(|_| CorruptKind::SymlinkTarget(self.index).into())
         } else {
-            let data = ext4.read_inode_file(self)?;
+            let data = ext4.read_inode_file(self).await?;
             PathBuf::try_from(data)
                 .map_err(|_| CorruptKind::SymlinkTarget(self.index).into())
         }

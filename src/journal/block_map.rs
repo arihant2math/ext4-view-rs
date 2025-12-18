@@ -12,6 +12,7 @@ use crate::checksum::Checksum;
 use crate::error::{CorruptKind, Ext4Error, IncompatibleKind};
 use crate::inode::Inode;
 use crate::iters::file_blocks::FileBlocks;
+use crate::iters::{AsyncIterator, AsyncSkip};
 use crate::journal::block_header::{JournalBlockHeader, JournalBlockType};
 use crate::journal::commit_block::validate_commit_block_checksum;
 use crate::journal::descriptor_block::{
@@ -25,24 +26,23 @@ use crate::util::usize_from_u32;
 use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::iter::Skip;
 
 /// Map from a block somewhere in the filesystem to a block in the
 /// journal. Both the key and value are absolute block indices.
 pub(super) type BlockMap = BTreeMap<FsBlockIndex, FsBlockIndex>;
 
 /// Read the block map from the journal.
-pub(super) fn load_block_map(
+pub(super) async fn load_block_map(
     fs: &Ext4,
     superblock: &JournalSuperblock,
     journal_inode: &Inode,
 ) -> Result<BlockMap, Ext4Error> {
     let mut loader = BlockMapLoader::new(fs, superblock, journal_inode)?;
 
-    while let Some(block_index) = loader.journal_block_iter.next() {
+    while let Some(block_index) = loader.journal_block_iter.next().await {
         loader.block_index = block_index?;
 
-        if let Err(err) = loader.process_next() {
+        if let Err(err) = loader.process_next().await {
             if let Ext4Error::Corrupt(_) = err {
                 // If a corruption error occurred, stop reading the
                 // journal. Any uncommitted changes are discarded.
@@ -86,7 +86,7 @@ struct BlockMapLoader<'a> {
 
     /// Iterator over blocks in the journal inode. At construction, the
     /// iterator is advanced to the journal start block.
-    journal_block_iter: Skip<FileBlocks>,
+    journal_block_iter: AsyncSkip<FileBlocks>,
 
     /// Current block index.
     block_index: FsBlockIndex,
@@ -145,9 +145,10 @@ impl<'a> BlockMapLoader<'a> {
     ///
     /// Note that depending on the block type, multiple blocks may be
     /// processed.
-    fn process_next(&mut self) -> Result<(), Ext4Error> {
+    async fn process_next(&mut self) -> Result<(), Ext4Error> {
         self.fs
-            .read_from_block(self.block_index, 0, &mut self.block)?;
+            .read_from_block(self.block_index, 0, &mut self.block)
+            .await?;
 
         let Some(header) = JournalBlockHeader::read_bytes(&self.block) else {
             // Journal block magic is not present, so we've reached
@@ -161,7 +162,7 @@ impl<'a> BlockMapLoader<'a> {
         }
 
         if header.block_type == JournalBlockType::DESCRIPTOR {
-            self.process_descriptor_block()?;
+            self.process_descriptor_block().await?;
         } else if header.block_type == JournalBlockType::REVOCATION {
             self.process_revocation_block()?;
         } else if header.block_type == JournalBlockType::COMMIT {
@@ -183,7 +184,7 @@ impl<'a> BlockMapLoader<'a> {
     ///
     /// Note that this will skip the `journal_block_iter` past the data
     /// blocks that follow the descriptor block.
-    fn process_descriptor_block(&mut self) -> Result<(), Ext4Error> {
+    async fn process_descriptor_block(&mut self) -> Result<(), Ext4Error> {
         validate_descriptor_block_checksum(self.superblock, &self.block)?;
 
         let tags = DescriptorBlockTagIter::new(
@@ -196,6 +197,7 @@ impl<'a> BlockMapLoader<'a> {
             let block_index = self
                 .journal_block_iter
                 .next()
+                .await
                 .ok_or(CorruptKind::JournalTruncated)??;
 
             // Check the data block checksum.
@@ -203,7 +205,8 @@ impl<'a> BlockMapLoader<'a> {
             checksum.update(self.superblock.uuid.as_bytes());
             checksum.update_u32_be(self.sequence);
             self.fs
-                .read_from_block(block_index, 0, &mut self.data_block)?;
+                .read_from_block(block_index, 0, &mut self.data_block)
+                .await?;
             checksum.update(&self.data_block);
             if checksum.finalize() != tag.checksum {
                 return Err(CorruptKind::JournalDescriptorTagChecksum.into());

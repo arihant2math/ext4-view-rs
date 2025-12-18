@@ -10,8 +10,8 @@ use crate::expected_holes_data;
 use crate::test_util::load_compressed_filesystem;
 use ext4_view::Ext4;
 
-pub fn load_ext2() -> Ext4 {
-    load_compressed_filesystem("test_disk_ext2.bin.zst")
+pub async fn load_ext2() -> Ext4 {
+    load_compressed_filesystem("test_disk_ext2.bin.zst").await
 }
 
 // This function is duplicated in `/xtask/src/main.rs`.
@@ -28,22 +28,25 @@ fn gen_big_file(num_blocks: u32) -> Vec<u8> {
     file
 }
 
-#[test]
-fn test_read_small_file() {
-    let fs = load_ext2();
-    assert_eq!(fs.read("/small_file").unwrap(), b"hello, world!");
+#[tokio::test]
+async fn test_read_small_file() {
+    let fs = load_ext2().await;
+    assert_eq!(fs.read("/small_file").await.unwrap(), b"hello, world!");
 }
 
-#[test]
-fn test_read_big_file() {
-    let fs = load_ext2();
+#[tokio::test]
+async fn test_read_big_file() {
+    let fs = load_ext2().await;
     let num_blocks = 12 + 256 + (256 * 256) + (256 * 16);
-    assert_eq!(fs.read("/big_file").unwrap(), gen_big_file(num_blocks));
+    assert_eq!(
+        fs.read("/big_file").await.unwrap(),
+        gen_big_file(num_blocks)
+    );
 }
 
-#[test]
-fn test_read_file_with_holes() {
-    let fs = load_ext2();
+#[tokio::test]
+async fn test_read_file_with_holes() {
+    let fs = load_ext2().await;
 
-    assert_eq!(fs.read("/holes").unwrap(), expected_holes_data());
+    assert_eq!(fs.read("/holes").await.unwrap(), expected_holes_data());
 }

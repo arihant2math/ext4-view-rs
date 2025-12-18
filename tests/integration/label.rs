@@ -58,8 +58,8 @@ fn test_label_not_utf8() {
     assert_eq!(format!("{}", label.display()), "�");
 }
 
-#[test]
-fn test_get_label() {
-    let fs = load_test_disk1();
+#[tokio::test]
+async fn test_get_label() {
+    let fs = load_test_disk1().await;
     assert_eq!(fs.label().to_str().unwrap(), "ext4-view testfs");
 }

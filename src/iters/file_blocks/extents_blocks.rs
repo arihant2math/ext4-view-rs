@@ -11,6 +11,7 @@ use crate::block_index::{FileBlockIndex, FsBlockIndex};
 use crate::error::{CorruptKind, Ext4Error};
 use crate::extent::Extent;
 use crate::inode::{Inode, InodeIndex};
+use crate::iters::AsyncIterator;
 use crate::iters::extents::Extents;
 
 /// Iterator over blocks in a file that uses extents.
@@ -62,7 +63,7 @@ impl ExtentsBlocks {
         })
     }
 
-    fn next_impl(&mut self) -> Result<Option<FsBlockIndex>, Ext4Error> {
+    async fn next_impl(&mut self) -> Result<Option<FsBlockIndex>, Ext4Error> {
         if self.block_within_file >= self.num_blocks_total {
             self.is_done = true;
             return Ok(None);
@@ -86,7 +87,7 @@ impl ExtentsBlocks {
         let extent = if let Some(extent) = &self.extent {
             extent
         } else {
-            match self.extents.next() {
+            match self.extents.next().await {
                 Some(Ok(extent)) => {
                     // If there is a hole between the current block in
                     // the file and the start of this extent, get the
@@ -197,12 +198,13 @@ mod tests {
     ///
     /// This only checks hole vs not-hole, since the specific block
     /// indices will change if test data is regenerated.
-    #[test]
-    fn test_extents_blocks_with_hole() {
-        let fs = load_test_disk1();
+    #[tokio::test]
+    async fn test_extents_blocks_with_hole() {
+        let fs = load_test_disk1().await;
 
         let inode = fs
             .path_to_inode(Path::new("/holes"), FollowSymlinks::All)
+            .await
             .unwrap();
 
         // This vec contains one boolean (hole vs not-hole) for each

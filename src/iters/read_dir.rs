@@ -13,6 +13,7 @@ use crate::dir_block::DirBlock;
 use crate::dir_entry::DirEntry;
 use crate::error::{CorruptKind, Ext4Error};
 use crate::inode::{Inode, InodeFlags, InodeIndex};
+use crate::iters::AsyncIterator;
 use crate::iters::file_blocks::FileBlocks;
 use crate::path::PathBuf;
 use alloc::rc::Rc;
@@ -91,12 +92,12 @@ impl ReadDir {
         })
     }
 
-    fn next_impl(&mut self) -> Result<Option<DirEntry>, Ext4Error> {
+    async fn next_impl(&mut self) -> Result<Option<DirEntry>, Ext4Error> {
         // Get the block index, or get the next one if not set.
         let block_index = if let Some(block_index) = self.block_index {
             block_index
         } else {
-            match self.file_blocks.next() {
+            match self.file_blocks.next().await {
                 Some(Ok(block_index)) => {
                     self.block_index = Some(block_index);
                     self.offset_within_block = 0;
@@ -130,7 +131,8 @@ impl ReadDir {
                 has_htree: self.has_htree,
                 checksum_base: self.checksum_base.clone(),
             }
-            .read(&mut self.block)?;
+            .read(&mut self.block)
+            .await?;
         }
 
         let (entry, entry_size) = DirEntry::from_bytes(
@@ -173,10 +175,10 @@ mod tests {
     use super::*;
     use crate::test_util::load_test_disk1;
 
-    #[test]
-    fn test_read_dir() {
-        let fs = load_test_disk1();
-        let root_inode = fs.read_root_inode().unwrap();
+    #[tokio::test]
+    async fn test_read_dir() {
+        let fs = load_test_disk1().await;
+        let root_inode = fs.read_root_inode().await.unwrap();
         let root_path = crate::PathBuf::new("/");
 
         // Use the iterator to get all DirEntries in the root directory.

@@ -39,16 +39,16 @@ impl Journal {
     ///
     /// Note: ext4 is all little-endian, except for the journal, which
     /// is all big-endian.
-    pub(crate) fn load(fs: &Ext4) -> Result<Self, Ext4Error> {
+    pub(crate) async fn load(fs: &Ext4) -> Result<Self, Ext4Error> {
         let Some(journal_inode) = fs.0.superblock.journal_inode else {
             // Return an empty journal if this filesystem does not have
             // a journal.
             return Ok(Self::empty());
         };
 
-        let journal_inode = Inode::read(fs, journal_inode)?;
-        let superblock = JournalSuperblock::load(fs, &journal_inode)?;
-        let block_map = load_block_map(fs, &superblock, &journal_inode)?;
+        let journal_inode = Inode::read(fs, journal_inode).await?;
+        let superblock = JournalSuperblock::load(fs, &journal_inode).await?;
+        let block_map = load_block_map(fs, &superblock, &journal_inode).await?;
 
         Ok(Self { block_map })
     }

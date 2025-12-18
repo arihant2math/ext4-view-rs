@@ -10,6 +10,7 @@ use crate::Ext4;
 use crate::checksum::Checksum;
 use crate::error::{CorruptKind, Ext4Error, IncompatibleKind};
 use crate::inode::Inode;
+use crate::iters::AsyncIterator;
 use crate::iters::file_blocks::FileBlocks;
 use crate::journal::block_header::{JournalBlockHeader, JournalBlockType};
 use crate::util::read_u32be;
@@ -65,7 +66,7 @@ impl JournalSuperblock {
     /// * The superblock cannot be read from the filesystem.
     /// * `JournalSuperblock::read_bytes` fails.
     /// * The journal's block size does not match the filesystem block size.
-    pub(super) fn load(
+    pub(super) async fn load(
         fs: &Ext4,
         journal_inode: &Inode,
     ) -> Result<Self, Ext4Error> {
@@ -77,9 +78,10 @@ impl JournalSuperblock {
         // journal's superblock.
         let block_index = journal_block_iter
             .next()
+            .await
             .ok_or(CorruptKind::JournalSize)??;
         let mut block = vec![0; SUPERBLOCK_SIZE];
-        fs.read_from_block(block_index, 0, &mut block)?;
+        fs.read_from_block(block_index, 0, &mut block).await?;
 
         let superblock = Self::read_bytes(&block)?;
 
@@ -201,13 +203,14 @@ mod tests {
     use super::*;
     use crate::test_util::load_compressed_filesystem;
 
-    #[test]
-    fn test_load_journal_superblock() {
+    #[tokio::test]
+    async fn test_load_journal_superblock() {
         let fs =
             load_compressed_filesystem("test_disk_4k_block_journal.bin.zst");
         let journal_inode =
             Inode::read(&fs, fs.0.superblock.journal_inode.unwrap()).unwrap();
-        let superblock = JournalSuperblock::load(&fs, &journal_inode).unwrap();
+        let superblock =
+            JournalSuperblock::load(&fs, &journal_inode).await.unwrap();
         assert_eq!(
             superblock,
             JournalSuperblock {

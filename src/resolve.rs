@@ -58,7 +58,7 @@ pub(crate) enum FollowSymlinks {
 /// This function panics if path resolution takes over 1000
 /// iterations. This should never occur in practice due to other
 /// restrictions, this is just a hedge against unforeseen bugs.
-pub(crate) fn resolve_path(
+pub(crate) async fn resolve_path(
     fs: &Ext4,
     path: Path<'_>,
     follow: FollowSymlinks,
@@ -94,7 +94,7 @@ pub(crate) fn resolve_path(
     let mut num_iterations: usize = 0;
 
     // Current inode, starting at the root.
-    let mut inode = fs.read_root_inode()?;
+    let mut inode = fs.read_root_inode().await?;
 
     // Current byte index within the path. Start just after the root `/`.
     let mut index = 1;
@@ -145,7 +145,8 @@ pub(crate) fn resolve_path(
             fs,
             &inode,
             DirEntryName::try_from(comp).unwrap(),
-        )?;
+        )
+        .await?;
 
         if comp == b"." {
             // Remove this component and continue on from the same index.
@@ -170,11 +171,11 @@ pub(crate) fn resolve_path(
                 return Err(Ext4Error::TooManySymlinks);
             }
 
-            let target = child_inode.symlink_target(fs)?;
+            let target = child_inode.symlink_target(fs).await?;
 
             let replace_start = if target.is_absolute() {
                 // Reset back to the root component.
-                inode = fs.read_root_inode()?;
+                inode = fs.read_root_inode().await?;
                 index = 1;
 
                 // Symlink target is absolute, replace everything up to
@@ -352,9 +353,9 @@ mod tests {
     }
 
     #[cfg(feature = "std")]
-    #[test]
-    fn test_resolve() {
-        let fs = &crate::test_util::load_test_disk1();
+    #[tokio::test]
+    async fn test_resolve() {
+        let fs = &crate::test_util::load_test_disk1().await;
 
         let follow = FollowSymlinks::All;
         let mkp = |s| Path::new(s);
@@ -378,40 +379,44 @@ mod tests {
             "/dir1/dir2/sym_rel_dir/../",
         ];
         for input in resolve_to_root {
-            let (inode, path) = resolve_path(fs, mkp(input), follow).unwrap();
+            let (inode, path) =
+                resolve_path(fs, mkp(input), follow).await.unwrap();
             assert_eq!((inode.index.get(), path.as_path()), (2, mkp("/")));
         }
 
         // Check directories.
         let (dir_inode, path) =
-            resolve_path(fs, mkp("/dir1/dir2"), follow).unwrap();
+            resolve_path(fs, mkp("/dir1/dir2"), follow).await.unwrap();
         assert_eq!(path, "/dir1/dir2");
         assert!(dir_inode.metadata.is_dir());
 
         // Check directory with trailing separator.
         let (inode, path) =
-            resolve_path(fs, mkp("/dir1/dir2/"), follow).unwrap();
+            resolve_path(fs, mkp("/dir1/dir2/"), follow).await.unwrap();
         assert_eq!(path, "/dir1/dir2");
         assert_eq!(inode.index, dir_inode.index);
 
         // Check '.' with trailing separator.
-        let (inode, path) =
-            resolve_path(fs, mkp("/dir1/dir2/./"), follow).unwrap();
+        let (inode, path) = resolve_path(fs, mkp("/dir1/dir2/./"), follow)
+            .await
+            .unwrap();
         assert_eq!(path, "/dir1/dir2");
         assert_eq!(inode.index, dir_inode.index);
 
         let small_file_path = PathBuf::new("/small_file");
 
         // Check absolute symlink.
-        let (inode, path) =
-            resolve_path(fs, mkp("/dir1/dir2/sym_abs"), follow).unwrap();
+        let (inode, path) = resolve_path(fs, mkp("/dir1/dir2/sym_abs"), follow)
+            .await
+            .unwrap();
         assert_eq!(path, small_file_path);
-        assert_eq!(fs.read_inode_file(&inode).unwrap(), b"hello, world!");
+        assert_eq!(fs.read_inode_file(&inode).await.unwrap(), b"hello, world!");
         let small_file_inode = inode.index;
 
         // Check relative symlink.
-        let (inode, path) =
-            resolve_path(fs, mkp("/dir1/dir2/sym_rel"), follow).unwrap();
+        let (inode, path) = resolve_path(fs, mkp("/dir1/dir2/sym_rel"), follow)
+            .await
+            .unwrap();
         assert_eq!((inode.index, &path), (small_file_inode, &small_file_path));
 
         // Check absolute symlink followed by additional components.
@@ -420,6 +425,7 @@ mod tests {
             mkp("/dir1/dir2/sym_abs_dir/../small_file"),
             follow,
         )
+        .await
         .unwrap();
         assert_eq!((inode.index, &path), (small_file_inode, &small_file_path));
 
@@ -429,6 +435,7 @@ mod tests {
             mkp("/dir1/dir2/sym_rel_dir/../small_file"),
             follow,
         )
+        .await
         .unwrap();
         assert_eq!((inode.index, &path), (small_file_inode, &small_file_path));
 
@@ -439,6 +446,7 @@ mod tests {
             mkp("/dir1/dir2/sym_abs"),
             FollowSymlinks::ExcludeFinalComponent,
         )
+        .await
         .unwrap();
         assert_eq!(path, "/dir1/dir2/sym_abs");
         assert!(inode.metadata.is_symlink());
@@ -447,20 +455,21 @@ mod tests {
             mkp("/dir1/dir2/sym_rel"),
             FollowSymlinks::ExcludeFinalComponent,
         )
+        .await
         .unwrap();
         assert_eq!(path, "/dir1/dir2/sym_rel");
         assert!(inode.metadata.is_symlink());
 
         // Error: not absolute.
         assert!(matches!(
-            resolve_path(fs, mkp("a"), follow),
+            resolve_path(fs, mkp("a"), follow).await,
             Err(Ext4Error::NotAbsolute)
         ));
 
         // Error: initial path is too long.
         let long_path = "/a".repeat(2049);
         assert!(matches!(
-            resolve_path(fs, mkp(&long_path), follow),
+            resolve_path(fs, mkp(&long_path), follow).await,
             Err(Ext4Error::PathTooLong)
         ));
 
@@ -472,25 +481,26 @@ mod tests {
                 fs,
                 mkp("/sym_long").join(long_path).as_path(),
                 follow
-            ),
+            )
+            .await,
             Err(Ext4Error::PathTooLong)
         ));
 
         // Error: symlink loop.
         assert!(matches!(
-            resolve_path(fs, mkp("/sym_loop_a"), follow),
+            resolve_path(fs, mkp("/sym_loop_a"), follow).await,
             Err(Ext4Error::TooManySymlinks)
         ));
 
         // Error: tried to lookup a child of a regular file.
         assert!(matches!(
-            resolve_path(fs, mkp("/empty_file/path"), follow),
+            resolve_path(fs, mkp("/empty_file/path"), follow).await,
             Err(Ext4Error::NotADirectory)
         ));
 
         // Error: separator after a regular file.
         assert!(matches!(
-            resolve_path(fs, mkp("/empty_file/"), follow),
+            resolve_path(fs, mkp("/empty_file/"), follow).await,
             Err(Ext4Error::NotADirectory)
         ));
 
@@ -501,13 +511,14 @@ mod tests {
                 fs,
                 mkp("/dir1/dir2/sym_abs_dir/"),
                 FollowSymlinks::ExcludeFinalComponent
-            ),
+            )
+            .await,
             Err(Ext4Error::NotADirectory)
         ));
 
         // Error: path does not exist.
         assert!(matches!(
-            resolve_path(fs, mkp("/empty_dir/does_not_exist"), follow),
+            resolve_path(fs, mkp("/empty_dir/does_not_exist"), follow).await,
             Err(Ext4Error::NotFound)
         ));
     }
