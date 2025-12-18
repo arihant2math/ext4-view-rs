@@ -11,6 +11,7 @@ mod extents_blocks;
 
 use crate::block_index::FsBlockIndex;
 use crate::inode::{Inode, InodeFlags};
+use crate::iters::AsyncIterator;
 use crate::{Ext4, Ext4Error};
 use block_map::BlockMap;
 use extents_blocks::ExtentsBlocks;
@@ -42,14 +43,13 @@ impl FileBlocks {
     }
 }
 
-impl Iterator for FileBlocks {
-    /// Block index.
+impl AsyncIterator for FileBlocks {
     type Item = Result<FsBlockIndex, Ext4Error>;
 
-    fn next(&mut self) -> Option<Result<FsBlockIndex, Ext4Error>> {
+    async fn next(&mut self) -> Option<Result<FsBlockIndex, Ext4Error>> {
         match self {
-            Self(FileBlocksInner::ExtentsBlocks(iter)) => iter.next(),
-            Self(FileBlocksInner::BlockMap(iter)) => iter.next(),
+            Self(FileBlocksInner::ExtentsBlocks(iter)) => iter.next().await,
+            Self(FileBlocksInner::BlockMap(iter)) => iter.next().await,
         }
     }
 }

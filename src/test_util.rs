@@ -12,7 +12,7 @@
 use super::Ext4;
 
 /// Decompress a file with zstd, then load it into an `Ext4`.
-pub(crate) fn load_compressed_filesystem(name: &str) -> Ext4 {
+pub(crate) async fn load_compressed_filesystem(name: &str) -> Ext4 {
     // This function executes quickly, so don't bother caching.
     let output = std::process::Command::new("zstd")
         .args([
@@ -24,9 +24,9 @@ pub(crate) fn load_compressed_filesystem(name: &str) -> Ext4 {
         .output()
         .unwrap();
     assert!(output.status.success());
-    Ext4::load(Box::new(output.stdout)).unwrap()
+    Ext4::load(Box::new(output.stdout)).await.unwrap()
 }
 
-pub(crate) fn load_test_disk1() -> Ext4 {
-    load_compressed_filesystem("test_disk1.bin.zst")
+pub(crate) async fn load_test_disk1() -> Ext4 {
+    load_compressed_filesystem("test_disk1.bin.zst").await
 }

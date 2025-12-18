@@ -9,9 +9,9 @@
 use crate::error::BoxedError;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
+use async_trait::async_trait;
 use core::error::Error;
 use core::fmt::{self, Display, Formatter};
-
 #[cfg(feature = "std")]
 use {
     std::fs::File,
@@ -22,13 +22,14 @@ use {
 /// file or device.
 ///
 /// [`Ext4`]: crate::Ext4
+#[async_trait]
 pub trait Ext4Read {
     /// Read bytes into `dst`, starting at `start_byte`.
     ///
     /// Exactly `dst.len()` bytes will be read; an error will be
     /// returned if there is not enough data to fill `dst`, or if the
     /// data cannot be read for any reason.
-    fn read(
+    async fn read(
         &mut self,
         start_byte: u64,
         dst: &mut [u8],
@@ -70,8 +71,9 @@ impl Display for MemIoError {
 
 impl Error for MemIoError {}
 
+#[async_trait]
 impl Ext4Read for Vec<u8> {
-    fn read(
+    async fn read(
         &mut self,
         start_byte: u64,
         dst: &mut [u8],
@@ -100,19 +102,19 @@ fn read_from_bytes(src: &[u8], start_byte: u64, dst: &mut [u8]) -> Option<()> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_vec_read() {
+    #[tokio::test]
+    async fn test_vec_read() {
         let mut src = vec![1, 2, 3];
 
         let mut dst = [0; 3];
-        src.read(0, &mut dst).unwrap();
+        src.read(0, &mut dst).await.unwrap();
         assert_eq!(dst, [1, 2, 3]);
 
         let mut dst = [0; 2];
-        src.read(1, &mut dst).unwrap();
+        src.read(1, &mut dst).await.unwrap();
         assert_eq!(dst, [2, 3]);
 
-        let err = src.read(4, &mut dst).unwrap_err();
+        let err = src.read(4, &mut dst).await.unwrap_err();
         assert_eq!(
             format!("{err}"),
             format!(

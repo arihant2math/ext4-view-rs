@@ -74,7 +74,7 @@ impl BlockGroupDescriptor {
     }
 
     /// Read a block group descriptor.
-    fn read(
+    async fn read(
         sb: &Superblock,
         reader: &mut dyn Ext4Read,
         bgd_index: BlockGroupIndex,
@@ -86,7 +86,7 @@ impl BlockGroupDescriptor {
 
         let start = Self::get_start_byte(sb, bgd_index)
             .ok_or(CorruptKind::BlockGroupDescriptor(bgd_index))?;
-        reader.read(start, &mut data).map_err(Ext4Error::Io)?;
+        reader.read(start, &mut data).await.map_err(Ext4Error::Io)?;
 
         let block_group_descriptor = Self::from_bytes(sb, &data);
 
@@ -126,7 +126,7 @@ impl BlockGroupDescriptor {
     }
 
     /// Read all block group descriptors.
-    pub(crate) fn read_all(
+    pub(crate) async fn read_all(
         sb: &Superblock,
         reader: &mut dyn Ext4Read,
     ) -> Result<Vec<Self>, Ext4Error> {
@@ -134,7 +134,7 @@ impl BlockGroupDescriptor {
             Vec::with_capacity(usize_from_u32(sb.num_block_groups));
 
         for bgd_index in 0..sb.num_block_groups {
-            let bgd = Self::read(sb, reader, bgd_index)?;
+            let bgd = Self::read(sb, reader, bgd_index).await?;
             block_group_descriptors.push(bgd);
         }
 

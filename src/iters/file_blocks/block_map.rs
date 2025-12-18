@@ -7,6 +7,7 @@
 // except according to those terms.
 
 use crate::inode::Inode;
+use crate::iters::AsyncIterator;
 use crate::iters::file_blocks::FsBlockIndex;
 use crate::util::read_u32le;
 use crate::{Ext4, Ext4Error};
@@ -100,7 +101,7 @@ impl BlockMap {
             self.num_blocks_yielded.checked_add(1).unwrap();
     }
 
-    fn next_impl(&mut self) -> Result<Option<FsBlockIndex>, Ext4Error> {
+    async fn next_impl(&mut self) -> Result<Option<FsBlockIndex>, Ext4Error> {
         if self.num_blocks_yielded >= self.num_blocks_total {
             self.is_done = true;
             return Ok(None);
@@ -128,13 +129,14 @@ impl BlockMap {
                     return Ok(None);
                 }
             } else {
-                self.level_1 =
-                    Some(IndirectBlockIter::new(self.fs.clone(), block_0)?);
+                self.level_1 = Some(
+                    IndirectBlockIter::new(self.fs.clone(), block_0).await?,
+                );
                 return Ok(None);
             }
         } else if self.level_0_index == 13 {
             if let Some(level_2) = &mut self.level_2 {
-                if let Some(block_index) = level_2.next() {
+                if let Some(block_index) = level_2.next().await {
                     let block_index = block_index?;
                     self.increment_num_blocks_yielded();
                     return Ok(Some(FsBlockIndex::from(block_index)));
@@ -144,15 +146,15 @@ impl BlockMap {
                     return Ok(None);
                 }
             } else {
-                self.level_2 = Some(DoubleIndirectBlockIter::new(
-                    self.fs.clone(),
-                    block_0,
-                )?);
+                self.level_2 = Some(
+                    DoubleIndirectBlockIter::new(self.fs.clone(), block_0)
+                        .await?,
+                );
                 return Ok(None);
             }
         } else if self.level_0_index == 14 {
             if let Some(level_3) = &mut self.level_3 {
-                if let Some(block_index) = level_3.next() {
+                if let Some(block_index) = level_3.next().await {
                     let block_index = block_index?;
                     self.increment_num_blocks_yielded();
                     return Ok(Some(FsBlockIndex::from(block_index)));
@@ -162,10 +164,10 @@ impl BlockMap {
                     return Ok(None);
                 }
             } else {
-                self.level_3 = Some(TripleIndirectBlockIter::new(
-                    self.fs.clone(),
-                    block_0,
-                )?);
+                self.level_3 = Some(
+                    TripleIndirectBlockIter::new(self.fs.clone(), block_0)
+                        .await?,
+                );
                 return Ok(None);
             }
         } else {
@@ -189,9 +191,10 @@ struct IndirectBlockIter {
 }
 
 impl IndirectBlockIter {
-    fn new(fs: Ext4, block_index: u32) -> Result<Self, Ext4Error> {
+    async fn new(fs: Ext4, block_index: u32) -> Result<Self, Ext4Error> {
         let mut block = vec![0u8; fs.0.superblock.block_size.to_usize()];
-        fs.read_from_block(FsBlockIndex::from(block_index), 0, &mut block)?;
+        fs.read_from_block(FsBlockIndex::from(block_index), 0, &mut block)
+            .await?;
 
         Ok(Self {
             block,
@@ -232,16 +235,16 @@ struct DoubleIndirectBlockIter {
 }
 
 impl DoubleIndirectBlockIter {
-    fn new(fs: Ext4, block_index: u32) -> Result<Self, Ext4Error> {
+    async fn new(fs: Ext4, block_index: u32) -> Result<Self, Ext4Error> {
         Ok(Self {
-            indirect_0: IndirectBlockIter::new(fs.clone(), block_index)?,
+            indirect_0: IndirectBlockIter::new(fs.clone(), block_index).await?,
             indirect_1: None,
             fs,
             is_done: false,
         })
     }
 
-    fn next_impl(&mut self) -> Result<Option<u32>, Ext4Error> {
+    async fn next_impl(&mut self) -> Result<Option<u32>, Ext4Error> {
         if let Some(indirect_1) = &mut self.indirect_1 {
             if let Some(block_index) = indirect_1.next() {
                 Ok(Some(block_index))
@@ -250,8 +253,9 @@ impl DoubleIndirectBlockIter {
                 Ok(None)
             }
         } else if let Some(block_index) = self.indirect_0.next() {
-            self.indirect_1 =
-                Some(IndirectBlockIter::new(self.fs.clone(), block_index)?);
+            self.indirect_1 = Some(
+                IndirectBlockIter::new(self.fs.clone(), block_index).await?,
+            );
             Ok(None)
         } else {
             self.is_done = true;
@@ -270,18 +274,18 @@ struct TripleIndirectBlockIter {
 }
 
 impl TripleIndirectBlockIter {
-    fn new(fs: Ext4, block_index: u32) -> Result<Self, Ext4Error> {
+    async fn new(fs: Ext4, block_index: u32) -> Result<Self, Ext4Error> {
         Ok(Self {
-            indirect_0: IndirectBlockIter::new(fs.clone(), block_index)?,
+            indirect_0: IndirectBlockIter::new(fs.clone(), block_index).await?,
             indirect_1: None,
             fs,
             is_done: false,
         })
     }
 
-    fn next_impl(&mut self) -> Result<Option<u32>, Ext4Error> {
+    async fn next_impl(&mut self) -> Result<Option<u32>, Ext4Error> {
         if let Some(indirect_1) = &mut self.indirect_1 {
-            if let Some(block_index) = indirect_1.next() {
+            if let Some(block_index) = indirect_1.next().await {
                 let block_index = block_index?;
                 Ok(Some(block_index))
             } else {
@@ -289,10 +293,10 @@ impl TripleIndirectBlockIter {
                 Ok(None)
             }
         } else if let Some(block_index) = self.indirect_0.next() {
-            self.indirect_1 = Some(DoubleIndirectBlockIter::new(
-                self.fs.clone(),
-                block_index,
-            )?);
+            self.indirect_1 = Some(
+                DoubleIndirectBlockIter::new(self.fs.clone(), block_index)
+                    .await?,
+            );
             Ok(None)
         } else {
             self.is_done = true;

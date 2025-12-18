@@ -41,7 +41,8 @@ fn parse_args() -> Result<(std::path::PathBuf, ext4_view::PathBuf)> {
     Ok((filesystem, path))
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let (path_to_filesystem, path_within_filesystem) = parse_args()?;
 
     // Load the filesystem.
@@ -50,9 +51,10 @@ fn main() -> Result<()> {
     })?;
 
     // Open a file within the filesystem for reading.
-    let mut file = fs.open(&path_within_filesystem).with_context(|| {
-        format!("Failed to open {}", path_within_filesystem.display())
-    })?;
+    let mut file =
+        fs.open(&path_within_filesystem).await.with_context(|| {
+            format!("Failed to open {}", path_within_filesystem.display())
+        })?;
 
     let stdout = io::stdout();
     let mut stdout = stdout.lock();

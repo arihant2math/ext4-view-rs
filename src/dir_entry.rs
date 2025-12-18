@@ -345,8 +345,8 @@ impl DirEntry {
     ///
     /// If the entry is a symlink, metadata for the symlink itself will
     /// be returned, not the symlink target.
-    pub fn metadata(&self) -> Result<Metadata, Ext4Error> {
-        let inode = Inode::read(&self.fs, self.inode)?;
+    pub async fn metadata(&self) -> Result<Metadata, Ext4Error> {
+        let inode = Inode::read(&self.fs, self.inode).await?;
         Ok(inode.metadata)
     }
 }
@@ -466,9 +466,9 @@ mod tests {
     }
 
     #[cfg(feature = "std")]
-    #[test]
-    fn test_dir_entry_from_bytes() {
-        let fs = crate::test_util::load_test_disk1();
+    #[tokio::test]
+    async fn test_dir_entry_from_bytes() {
+        let fs = crate::test_util::load_test_disk1().await;
 
         let inode1 = InodeIndex::new(1).unwrap();
         let inode2 = InodeIndex::new(2).unwrap();

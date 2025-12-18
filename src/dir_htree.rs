@@ -14,6 +14,7 @@ use crate::dir_entry_hash::HashAlg;
 use crate::error::{CorruptKind, Ext4Error};
 use crate::extent::Extent;
 use crate::inode::{Inode, InodeFlags, InodeIndex};
+use crate::iters::AsyncIterator;
 use crate::iters::extents::Extents;
 use crate::iters::file_blocks::FileBlocks;
 use crate::path::PathBuf;
@@ -179,7 +180,7 @@ impl<'a> InternalNode<'a> {
 
 /// Read the block containing the root node of an htree into
 /// `block`. This is always the first block of the file.
-fn read_root_block(
+async fn read_root_block(
     fs: &Ext4,
     inode: &Inode,
     block: &mut [u8],
@@ -189,6 +190,7 @@ fn read_root_block(
     // Get the first block.
     let block_index = file_blocks
         .next()
+        .await
         .ok_or(CorruptKind::DirEntry(inode.index))??;
 
     // Read the first block of the extent.
@@ -200,7 +202,7 @@ fn read_root_block(
         has_htree: true,
         checksum_base: inode.checksum_base.clone(),
     };
-    dir_block.read(block)
+    dir_block.read(block).await
 }
 
 /// Check if name is "." or ".." and return the corresponding entry if
@@ -241,12 +243,13 @@ fn read_dot_or_dotdot(
 }
 
 /// Find the extent within a file that includes the given child `block`.
-fn find_extent_for_block(
+async fn find_extent_for_block(
     fs: &Ext4,
     inode: &Inode,
     block: FileBlockIndex,
 ) -> Result<Extent, Ext4Error> {
-    for extent in Extents::new(fs.clone(), inode)? {
+    let mut extents = Extents::new(fs.clone(), inode)?;
+    while let Some(extent) = extents.next().await {
         let extent = extent?;
 
         let start = extent.block_within_file;
@@ -262,13 +265,13 @@ fn find_extent_for_block(
 }
 
 /// Convert from a block offset within a file to an absolute block index.
-fn block_from_file_block(
+async fn block_from_file_block(
     fs: &Ext4,
     inode: &Inode,
     relative_block: FileBlockIndex,
 ) -> Result<FsBlockIndex, Ext4Error> {
     if inode.flags.contains(InodeFlags::EXTENTS) {
-        let extent = find_extent_for_block(fs, inode, relative_block)?;
+        let extent = find_extent_for_block(fs, inode, relative_block).await?;
         let block_within_extent = relative_block
             .checked_sub(extent.block_within_file)
             .ok_or(CorruptKind::DirEntry(inode.index))?;
@@ -278,9 +281,10 @@ fn block_from_file_block(
             .ok_or(CorruptKind::DirEntry(inode.index))?;
         Ok(absolute_block)
     } else {
-        let mut block_map = FileBlocks::new(fs.clone(), inode)?;
+        let block_map = FileBlocks::new(fs.clone(), inode)?;
         block_map
             .nth(usize_from_u32(relative_block))
+            .await
             .ok_or(CorruptKind::DirEntry(inode.index))?
     }
 }
@@ -289,7 +293,7 @@ fn block_from_file_block(
 ///
 /// On success, `block` will contain the leaf node's directory block
 /// data.
-fn find_leaf_node(
+async fn find_leaf_node(
     fs: &Ext4,
     inode: &Inode,
     name: DirEntryName<'_>,
@@ -319,7 +323,7 @@ fn find_leaf_node(
     for level in 0..=depth {
         // Get the absolute block index and read the block's data.
         let block_index =
-            block_from_file_block(fs, inode, child_block_relative)?;
+            block_from_file_block(fs, inode, child_block_relative).await?;
         let dir_block = DirBlock {
             fs,
             dir_inode: inode.index,
@@ -328,7 +332,7 @@ fn find_leaf_node(
             has_htree: true,
             checksum_base: inode.checksum_base.clone(),
         };
-        dir_block.read(block)?;
+        dir_block.read(block).await?;
 
         // If the block is an internal node, find the next child
         // block. Otherwise, we've reached a leaf node and there's
@@ -354,7 +358,7 @@ fn find_leaf_node(
 /// Returns [`Ext4Error::NotFound`] if the entry doesn't exist.
 ///
 /// Panics if the directory doesn't have an htree.
-pub(crate) fn get_dir_entry_via_htree(
+pub(crate) async fn get_dir_entry_via_htree(
     fs: &Ext4,
     inode: &Inode,
     name: DirEntryName<'_>,
@@ -366,7 +370,7 @@ pub(crate) fn get_dir_entry_via_htree(
 
     // Read the first block of the file, which contains the root node of
     // the htree.
-    read_root_block(fs, inode, &mut block)?;
+    read_root_block(fs, inode, &mut block).await?;
 
     // Handle "." and ".." entries.
     if let Some(entry) = read_dot_or_dotdot(fs.clone(), inode, name, &block)? {
@@ -375,7 +379,7 @@ pub(crate) fn get_dir_entry_via_htree(
 
     // Find the leaf node that might contain the entry. This will update
     // `block` to contain the leaf node's block data.
-    find_leaf_node(fs, inode, name, &mut block)?;
+    find_leaf_node(fs, inode, name, &mut block).await?;
 
     // The entry's `path()` method will not be called, so the value of
     // the base path does not matter.
@@ -493,17 +497,18 @@ mod tests {
     }
 
     #[cfg(feature = "std")]
-    #[test]
-    fn test_read_dot_or_dotdot() {
-        let fs = crate::test_util::load_test_disk1();
+    #[tokio::test]
+    async fn test_read_dot_or_dotdot() {
+        let fs = crate::test_util::load_test_disk1().await;
 
         let mut block = vec![0; fs.0.superblock.block_size.to_usize()];
 
         // Read the root block of an htree.
         let inode = fs
             .path_to_inode("/big_dir".try_into().unwrap(), FollowSymlinks::All)
+            .await
             .unwrap();
-        read_root_block(&fs, &inode, &mut block).unwrap();
+        read_root_block(&fs, &inode, &mut block).await.unwrap();
 
         // Get the "." entry.
         let entry = read_dot_or_dotdot(
@@ -573,15 +578,17 @@ mod tests {
     /// Returns the number of entries.
     #[cfg(feature = "std")]
     #[track_caller]
-    fn compare_all_entries(fs: &Ext4, dir: Path<'_>) -> usize {
-        let dir_inode = fs.path_to_inode(dir, FollowSymlinks::All).unwrap();
-        let iter =
+    async fn compare_all_entries(fs: &Ext4, dir: Path<'_>) -> usize {
+        let dir_inode =
+            fs.path_to_inode(dir, FollowSymlinks::All).await.unwrap();
+        let mut iter =
             ReadDir::new(fs.clone(), &dir_inode, PathBuf::from(dir)).unwrap();
         let mut count = 0;
-        for iter_entry in iter {
+        for iter_entry in iter.next().await {
             let iter_entry = iter_entry.unwrap();
             let htree_entry =
                 get_dir_entry_via_htree(fs, &dir_inode, iter_entry.file_name())
+                    .await
                     .unwrap();
             assert_eq!(htree_entry.file_name(), iter_entry.file_name());
             assert_eq!(htree_entry.inode, iter_entry.inode);
@@ -591,24 +598,24 @@ mod tests {
     }
 
     #[cfg(feature = "std")]
-    #[test]
-    fn test_get_dir_entry_via_htree() {
+    #[tokio::test]
+    async fn test_get_dir_entry_via_htree() {
         let fs = crate::test_util::load_test_disk1();
 
         // Resolve paths in `/medium_dir` via htree.
         let medium_dir = Path::new("/medium_dir");
-        assert_eq!(compare_all_entries(&fs, medium_dir), 1_002);
+        assert_eq!(compare_all_entries(&fs, medium_dir).await, 1_002);
 
         // Resolve paths in `/big_dir` via htree.
         let big_dir = Path::new("/big_dir");
-        assert_eq!(compare_all_entries(&fs, big_dir), 10_002);
+        assert_eq!(compare_all_entries(&fs, big_dir).await, 10_002);
     }
 
     /// Test `block_from_file_block` with a file that uses extents.
     #[cfg(feature = "std")]
-    #[test]
-    fn test_block_from_file_block() {
-        let fs = crate::test_util::load_test_disk1();
+    #[tokio::test]
+    async fn test_block_from_file_block() {
+        let fs = crate::test_util::load_test_disk1().await;
 
         // Manually construct a simple extent tree containing two
         // extents.
@@ -658,6 +665,7 @@ mod tests {
                 "/medium_dir".try_into().unwrap(),
                 FollowSymlinks::All,
             )
+            .await
             .unwrap();
         inode.inline_data.copy_from_slice(&extents);
 
@@ -683,16 +691,16 @@ mod tests {
         );
 
         // Blocks in extent 0.
-        assert_eq!(block_from_file_block(&fs, &inode, 0).unwrap(), 2543);
-        assert_eq!(block_from_file_block(&fs, &inode, 1).unwrap(), 2544);
-        assert_eq!(block_from_file_block(&fs, &inode, 22).unwrap(), 2565);
+        assert_eq!(block_from_file_block(&fs, &inode, 0).await.unwrap(), 2543);
+        assert_eq!(block_from_file_block(&fs, &inode, 1).await.unwrap(), 2544);
+        assert_eq!(block_from_file_block(&fs, &inode, 22).await.unwrap(), 2565);
 
         // Blocks in extent 1.
-        assert_eq!(block_from_file_block(&fs, &inode, 23).unwrap(), 11);
-        assert_eq!(block_from_file_block(&fs, &inode, 24).unwrap(), 12);
-        assert_eq!(block_from_file_block(&fs, &inode, 69).unwrap(), 57);
+        assert_eq!(block_from_file_block(&fs, &inode, 23).await.unwrap(), 11);
+        assert_eq!(block_from_file_block(&fs, &inode, 24).await.unwrap(), 12);
+        assert_eq!(block_from_file_block(&fs, &inode, 69).await.unwrap(), 57);
 
         // Invalid block.
-        assert!(block_from_file_block(&fs, &inode, 70).is_err());
+        assert!(block_from_file_block(&fs, &inode, 70).await.is_err());
     }
 }

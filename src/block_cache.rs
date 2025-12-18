@@ -6,6 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use crate::Ext4Inner;
 use crate::block_index::FsBlockIndex;
 use crate::block_size::BlockSize;
 use crate::error::CorruptKind;
@@ -13,6 +14,7 @@ use crate::error::Ext4Error;
 use crate::util::usize_from_u32;
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
+use alloc::sync::Arc;
 use alloc::vec;
 
 /// Entry for a single block in the cache.
@@ -156,7 +158,8 @@ impl BlockCache {
     /// # Preconditions
     ///
     /// `block_index` must be less than `num_fs_blocks`.
-    pub(crate) fn get_or_insert_blocks<F>(
+    #[allow(unused)]
+    pub(crate) async fn get_or_insert_blocks<F>(
         &mut self,
         block_index: FsBlockIndex,
         f: F,
@@ -194,6 +197,78 @@ impl BlockCache {
 
         // Read blocks into the read buffer.
         f(&mut self.read_buf[..num_bytes])?;
+
+        // Add blocks to the cache. Blocks are added to the front in
+        // reverse order, so that the requested `block_index` is at the
+        // very front of the cache.
+        for i in (0..num_blocks).rev() {
+            // OK to unwrap: function precondition requires that the
+            // requested blocks are valid (i.e. within the filesystem),
+            // Valid block indices fit in a `u64`, so this can't
+            // overflow.
+            let block_index = block_index.checked_add(u64::from(i)).unwrap();
+
+            self.insert_block(block_index, i);
+        }
+
+        // Get the requested block data, which should be at the front of
+        // the cache now.
+        let entry = &self.entries[0];
+        assert_eq!(entry.block_index, block_index);
+        Ok(&*entry.data)
+    }
+
+    pub(crate) async fn get_or_insert_blocks_async<F>(
+        &mut self,
+        block_index: FsBlockIndex,
+        f: F,
+        err: impl FnOnce() -> Ext4Error,
+    ) -> Result<&[u8], Ext4Error>
+    where
+        F: FnOnce() -> Arc<Ext4Inner>,
+    {
+        assert!(block_index < self.num_fs_blocks);
+
+        // Check if the block is already cached.
+        if let Some(index) = self
+            .entries
+            .iter()
+            .position(|entry| entry.block_index == block_index)
+        {
+            // Move the entry to the front of the cache if it's not
+            // already there.
+            if index != 0 {
+                let entry = self.entries.remove(index).unwrap();
+                self.entries.push_front(entry);
+            }
+
+            // Return the cached block data.
+            return Ok(&*self.entries[0].data);
+        }
+
+        // Get the number of blocks/bytes to read.
+        let num_blocks = self.num_blocks_to_read(block_index);
+        let num_bytes = usize_from_u32(num_blocks)
+            .checked_mul(self.block_size.to_usize())
+            .ok_or(CorruptKind::BlockCacheReadTooLarge {
+                num_blocks,
+                block_size: self.block_size,
+            })?;
+
+        // Read blocks into the read buffer.
+        let ext4_inner = f();
+
+        let block_size = ext4_inner.superblock.block_size;
+        // Get the absolute byte to start reading from.
+        let start_byte = block_index
+            .checked_mul(block_size.to_u64())
+            .ok_or_else(err)?;
+        ext4_inner
+            .reader
+            .borrow_mut()
+            .read(start_byte, &mut self.read_buf[..num_bytes])
+            .await
+            .map_err(Ext4Error::Io)?;
 
         // Add blocks to the cache. Blocks are added to the front in
         // reverse order, so that the requested `block_index` is at the
@@ -390,8 +465,8 @@ mod tests {
         assert_eq!(cache.entries[1].data.as_ptr(), block123_ptr);
     }
 
-    #[test]
-    fn test_get_or_insert_blocks() {
+    #[tokio::test]
+    async fn test_get_or_insert_blocks() {
         let num_fs_blocks = 8;
         let mut cache = BlockCache::with_opts(
             CacheOpts {
@@ -409,6 +484,7 @@ mod tests {
                 .get_or_insert_blocks(1, |_| {
                     Err(CorruptKind::TooManyBlocksInFile.into())
                 })
+                .await
                 .unwrap_err(),
             CorruptKind::TooManyBlocksInFile
         );
@@ -427,6 +503,7 @@ mod tests {
 
                 Ok(())
             })
+            .await
             .unwrap();
 
         // Check that block 1's data was returned.
@@ -445,6 +522,7 @@ mod tests {
             .get_or_insert_blocks(2, |_| {
                 panic!("read closure called unexpectedly");
             })
+            .await
             .unwrap();
 
         // Check that block 2's data was returned.
@@ -455,7 +533,7 @@ mod tests {
         assert_eq!(cache.entries[1].block_index, 1);
 
         // Add blocks 3 and 4 to the cache.
-        cache.get_or_insert_blocks(3, |_| Ok(())).unwrap();
+        cache.get_or_insert_blocks(3, |_| Ok(())).await.unwrap();
         assert_eq!(cache.entries[0].block_index, 3);
         assert_eq!(cache.entries[1].block_index, 4);
         assert_eq!(cache.entries[2].block_index, 2);
@@ -463,7 +541,7 @@ mod tests {
 
         // Add blocks 5 and 6 to the cache. This causes blocks 1 and 2
         // to be evicted.
-        cache.get_or_insert_blocks(5, |_| Ok(())).unwrap();
+        cache.get_or_insert_blocks(5, |_| Ok(())).await.unwrap();
         assert_eq!(cache.entries[0].block_index, 5);
         assert_eq!(cache.entries[1].block_index, 6);
         assert_eq!(cache.entries[2].block_index, 3);

@@ -186,7 +186,7 @@ impl Extents {
     //   just means the iterator is not in a leaf node. The outer loop
     //   in `Iterator::next` will call `next_impl` again as long as
     //   there are nodes left to process.
-    fn next_impl(&mut self) -> Result<Option<Extent>, Ext4Error> {
+    async fn next_impl(&mut self) -> Result<Option<Extent>, Ext4Error> {
         let Some(item) = self.to_visit.last_mut() else {
             self.is_done = true;
             return Ok(None);
@@ -230,7 +230,8 @@ impl Extents {
             // find out how much data is in the full child node.
             let mut child_header = [0; ENTRY_SIZE_IN_BYTES];
             self.ext4
-                .read_from_block(child_block, 0, &mut child_header)?;
+                .read_from_block(child_block, 0, &mut child_header)
+                .await?;
             let child_header =
                 NodeHeader::from_bytes(&child_header, self.inode)?;
 
@@ -254,7 +255,9 @@ impl Extents {
                 return Err(CorruptKind::ExtentNodeSize(self.inode).into());
             }
             let mut child_node = vec![0; child_node_size];
-            self.ext4.read_from_block(child_block, 0, &mut child_node)?;
+            self.ext4
+                .read_from_block(child_block, 0, &mut child_node)
+                .await?;
 
             // Validating the checksum here covers everything but the
             // root node. The root node is embedded within the inode,
