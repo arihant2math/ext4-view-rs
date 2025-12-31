@@ -68,20 +68,21 @@ impl Journal {
 #[cfg(all(test, feature = "std"))]
 mod tests {
     use crate::test_util::load_compressed_filesystem;
-    use alloc::rc::Rc;
+    use std::sync::Arc;
 
-    #[test]
-    fn test_journal() {
+    #[tokio::test]
+    async fn test_journal() {
         let mut fs =
-            load_compressed_filesystem("test_disk_4k_block_journal.bin.zst");
+            load_compressed_filesystem("test_disk_4k_block_journal.bin.zst")
+                .await;
 
         let test_dir = "/dir500";
 
         // With the journal in place, this directory exists.
-        assert!(fs.exists(test_dir).unwrap());
+        assert!(fs.exists(test_dir).await.unwrap());
 
         // Clear the journal, and verify that the directory no longer exists.
-        Rc::get_mut(&mut fs.0).unwrap().journal.block_map.clear();
-        assert!(!fs.exists(test_dir).unwrap());
+        Arc::get_mut(&mut fs.0).unwrap().journal.block_map.clear();
+        assert!(!fs.exists(test_dir).await.unwrap());
     }
 }

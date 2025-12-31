@@ -206,9 +206,12 @@ mod tests {
     #[tokio::test]
     async fn test_load_journal_superblock() {
         let fs =
-            load_compressed_filesystem("test_disk_4k_block_journal.bin.zst");
+            load_compressed_filesystem("test_disk_4k_block_journal.bin.zst")
+                .await;
         let journal_inode =
-            Inode::read(&fs, fs.0.superblock.journal_inode.unwrap()).unwrap();
+            Inode::read(&fs, fs.0.superblock.journal_inode.unwrap())
+                .await
+                .unwrap();
         let superblock =
             JournalSuperblock::load(&fs, &journal_inode).await.unwrap();
         assert_eq!(

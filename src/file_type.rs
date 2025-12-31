@@ -9,7 +9,7 @@
 use crate::inode::InodeMode;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct FileTypeError;
+pub struct FileTypeError;
 
 /// File type.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]

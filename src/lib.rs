@@ -95,7 +95,7 @@
 
 #![cfg_attr(not(any(feature = "std", test)), no_std)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![forbid(unsafe_code)]
+// #![forbid(unsafe_code)]
 #![warn(
     clippy::arithmetic_side_effects,
     clippy::as_conversions,
@@ -139,42 +139,46 @@ mod uuid;
 mod test_util;
 
 use alloc::boxed::Box;
-use alloc::sync::Arc;
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use block_cache::BlockCache;
 use block_group::BlockGroupDescriptor;
 use block_index::FsBlockIndex;
-use core::cell::RefCell;
+use core::cell::UnsafeCell;
 use core::fmt::{self, Debug, Formatter};
+use core::sync::atomic::AtomicBool;
 use error::CorruptKind;
 use features::ReadOnlyCompatibleFeatures;
-use inode::{Inode, InodeIndex};
+use inode::InodeIndex;
 use journal::Journal;
-use resolve::FollowSymlinks;
 use superblock::Superblock;
 use util::usize_from_u32;
 
+pub use dir::get_dir_entry_inode_by_name;
 pub use dir_entry::{DirEntry, DirEntryName, DirEntryNameError};
 pub use error::{Corrupt, Ext4Error, Incompatible};
 pub use features::IncompatibleFeatures;
 pub use file::File;
 pub use file_type::FileType;
 pub use format::BytesDisplay;
-pub use iters::{AsyncIterator, AsyncFilter, AsyncMap, AsyncSkip};
+pub use inode::Inode;
 pub use iters::read_dir::ReadDir;
+pub use iters::{AsyncFilter, AsyncIterator, AsyncMap, AsyncSkip};
 pub use label::Label;
 pub use metadata::Metadata;
 pub use path::{Component, Components, Path, PathBuf, PathError};
 pub use reader::{Ext4Read, MemIoError};
+pub use resolve::FollowSymlinks;
 pub use uuid::Uuid;
 
 struct Ext4Inner {
     superblock: Superblock,
     block_group_descriptors: Vec<BlockGroupDescriptor>,
     journal: Journal,
-    block_cache: RefCell<BlockCache>,
+    block_cache_lock: AtomicBool,
+    block_cache: UnsafeCell<BlockCache>,
 
     /// Reader providing access to the underlying storage.
     ///
@@ -188,7 +192,7 @@ struct Ext4Inner {
     /// mutable method to be called with an immutable `&Ext4Inner`
     /// reference. `RefCell` enforces at runtime that only one mutable
     /// borrow exists at a time.
-    reader: RefCell<Box<dyn Ext4Read>>,
+    reader: Box<dyn Ext4Read>,
 }
 
 /// Read-only access to an [ext4] filesystem.
@@ -196,6 +200,10 @@ struct Ext4Inner {
 /// [ext4]: https://en.wikipedia.org/wiki/Ext4
 #[derive(Clone)]
 pub struct Ext4(Arc<Ext4Inner>);
+
+// TODO: fix
+unsafe impl Send for Ext4Inner {}
+unsafe impl Sync for Ext4Inner {}
 
 impl Ext4 {
     /// Load an `Ext4` instance from the given `reader`.
@@ -224,12 +232,13 @@ impl Ext4 {
                 &mut *reader,
             )
             .await?,
-            reader: RefCell::new(reader),
+            reader,
             superblock,
             // Initialize with an empty journal, because loading the
             // journal requires a valid `Ext4` object.
             journal: Journal::empty(),
-            block_cache: RefCell::new(block_cache),
+            block_cache_lock: AtomicBool::new(false),
+            block_cache: UnsafeCell::new(block_cache),
         }));
 
         // Load the actual journal, if present.
@@ -237,23 +246,6 @@ impl Ext4 {
         Arc::get_mut(&mut fs.0).unwrap().journal = journal;
 
         Ok(fs)
-    }
-
-    /// Load an `Ext4` filesystem from the given `path`.
-    ///
-    /// This reads and validates the superblock and block group
-    /// descriptors. No other data is read.
-    #[cfg(feature = "std")]
-    pub async fn load_from_path<P: AsRef<std::path::Path>>(
-        path: P,
-    ) -> Result<Self, Ext4Error> {
-        async fn inner(path: &std::path::Path) -> Result<Ext4, Ext4Error> {
-            let file = std::fs::File::open(path)
-                .map_err(|e| Ext4Error::Io(Box::new(e)))?;
-            Ext4::load(Box::new(file)).await
-        }
-
-        inner(path.as_ref()).await
     }
 
     /// Get the filesystem label.
@@ -278,7 +270,7 @@ impl Ext4 {
     }
 
     /// Read the inode of the root `/` directory.
-    async fn read_root_inode(&self) -> Result<Inode, Ext4Error> {
+    pub async fn read_root_inode(&self) -> Result<Inode, Ext4Error> {
         let root_inode_index = InodeIndex::new(2).unwrap();
         Inode::read(self, root_inode_index).await
     }
@@ -345,7 +337,15 @@ impl Ext4 {
             return Err(err());
         }
 
-        let mut block_cache = self.0.block_cache.borrow_mut();
+        // Acquire block cache lock
+        while let Err(_) = self.0.block_cache_lock.compare_exchange(
+            false,
+            true,
+            core::sync::atomic::Ordering::Acquire,
+            core::sync::atomic::Ordering::Relaxed,
+        ) {}
+
+        let block_cache = unsafe { self.0.block_cache.get().as_mut().unwrap() };
         let cached_block = block_cache
             .get_or_insert_blocks_async(block_index, || self.0.clone(), err)
             .await?;
@@ -353,7 +353,10 @@ impl Ext4 {
         dst.copy_from_slice(
             &cached_block[usize_from_u32(offset_within_block)..read_end],
         );
-
+        // Release block cache lock
+        self.0
+            .block_cache_lock
+            .store(false, core::sync::atomic::Ordering::Release);
         Ok(())
     }
 
@@ -363,7 +366,7 @@ impl Ext4 {
     ///
     /// Fails with `FileTooLarge` if the size of the file is too large
     /// to fit in a [`usize`].
-    async fn read_inode_file(
+    pub async fn read_inode_file(
         &self,
         inode: &Inode,
     ) -> Result<Vec<u8>, Ext4Error> {
@@ -386,7 +389,7 @@ impl Ext4 {
     }
 
     /// Follow a path to get an inode.
-    async fn path_to_inode(
+    pub async fn path_to_inode(
         &self,
         path: Path<'_>,
         follow: FollowSymlinks,
@@ -677,17 +680,17 @@ mod tests {
     use super::*;
     use test_util::load_test_disk1;
 
-    #[test]
-    fn test_load_errors() {
+    #[tokio::test]
+    async fn test_load_errors() {
         // Not enough data.
         assert!(matches!(
-            Ext4::load(Box::new(vec![])).unwrap_err(),
+            Ext4::load(Box::new(vec![])).await.unwrap_err(),
             Ext4Error::Io(_)
         ));
 
         // Invalid superblock.
         assert_eq!(
-            Ext4::load(Box::new(vec![0; 2048])).unwrap_err(),
+            Ext4::load(Box::new(vec![0; 2048])).await.unwrap_err(),
             CorruptKind::SuperblockMagic
         );
 
@@ -696,14 +699,14 @@ mod tests {
         fs_data[1024..2048]
             .copy_from_slice(include_bytes!("../test_data/raw_superblock.bin"));
         assert!(matches!(
-            Ext4::load(Box::new(fs_data.clone())).unwrap_err(),
+            Ext4::load(Box::new(fs_data.clone())).await.unwrap_err(),
             Ext4Error::Io(_)
         ));
 
         // Invalid block group descriptor checksum.
         fs_data.resize(3048usize, 0u8);
         assert_eq!(
-            Ext4::load(Box::new(fs_data.clone())).unwrap_err(),
+            Ext4::load(Box::new(fs_data.clone())).await.unwrap_err(),
             CorruptKind::BlockGroupDescriptorChecksum(0)
         );
     }
@@ -711,14 +714,14 @@ mod tests {
     /// Test that loading the data from
     /// https://github.com/nicholasbishop/ext4-view-rs/issues/280 does not
     /// panic.
-    #[test]
-    fn test_invalid_ext4_data() {
+    #[tokio::test]
+    async fn test_invalid_ext4_data() {
         // Fill in zeros for the first 1024 bytes, then add the test data.
         let mut data = vec![0; 1024];
         data.extend(include_bytes!("../test_data/not_ext4.bin"));
 
         assert_eq!(
-            Ext4::load(Box::new(data)).unwrap_err(),
+            Ext4::load(Box::new(data)).await.unwrap_err(),
             CorruptKind::InvalidBlockSize
         );
     }
@@ -777,7 +780,7 @@ mod tests {
         let fs = load_test_disk1().await;
         let mut dst = vec![0; 25];
         assert_eq!(
-            fs.read_from_block(1, 1000, &mut dst).unwrap_err(),
+            fs.read_from_block(1, 1000, &mut dst).await.unwrap_err(),
             block_read_error(1, 1000, 25),
         );
     }

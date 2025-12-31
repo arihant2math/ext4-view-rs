@@ -19,7 +19,7 @@ use crate::iters::extents::Extents;
 use crate::iters::file_blocks::FileBlocks;
 use crate::path::PathBuf;
 use crate::util::{read_u16le, read_u32le, usize_from_u32};
-use alloc::rc::Rc;
+use alloc::sync::Arc;
 use alloc::vec;
 
 type DirHash = u32;
@@ -232,7 +232,7 @@ fn read_dot_or_dotdot(
         fs,
         &block[offset..],
         inode.index,
-        Rc::new(PathBuf::empty()),
+        Arc::new(PathBuf::empty()),
     )?;
     let entry = entry.ok_or_else(corrupt)?;
     if entry.file_name() == name {
@@ -383,7 +383,7 @@ pub(crate) async fn get_dir_entry_via_htree(
 
     // The entry's `path()` method will not be called, so the value of
     // the base path does not matter.
-    let path = Rc::new(PathBuf::empty());
+    let path = Arc::new(PathBuf::empty());
 
     // Do a linear search through the leaf block for the right entry.
     let mut offset_within_block = 0;
@@ -600,7 +600,7 @@ mod tests {
     #[cfg(feature = "std")]
     #[tokio::test]
     async fn test_get_dir_entry_via_htree() {
-        let fs = crate::test_util::load_test_disk1();
+        let fs = crate::test_util::load_test_disk1().await;
 
         // Resolve paths in `/medium_dir` via htree.
         let medium_dir = Path::new("/medium_dir");
@@ -673,7 +673,9 @@ mod tests {
         let extents: Vec<_> = Extents::new(fs.clone(), &inode)
             .unwrap()
             .map(|e| e.unwrap())
-            .collect();
+            .await
+            .collect()
+            .await;
         assert_eq!(
             extents,
             [

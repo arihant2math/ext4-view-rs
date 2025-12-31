@@ -18,7 +18,7 @@ use crate::path::PathBuf;
 /// Search a directory inode for an entry with the given `name`. If
 /// found, return the entry's inode, otherwise return a `NotFound`
 /// error.
-pub(crate) async fn get_dir_entry_inode_by_name(
+pub async fn get_dir_entry_inode_by_name(
     fs: &Ext4,
     dir_inode: &Inode,
     name: DirEntryName<'_>,

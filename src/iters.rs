@@ -14,7 +14,6 @@ pub trait AsyncIterator {
     /// The type of the items being yielded by this iterator.
     type Item;
 
-
     /// Equivalent to [`Iterator::next`]
     async fn next(&mut self) -> Option<<Self as AsyncIterator>::Item>;
 

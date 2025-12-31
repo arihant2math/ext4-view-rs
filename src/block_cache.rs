@@ -265,7 +265,6 @@ impl BlockCache {
             .ok_or_else(err)?;
         ext4_inner
             .reader
-            .borrow_mut()
             .read(start_byte, &mut self.read_buf[..num_bytes])
             .await
             .map_err(Ext4Error::Io)?;
