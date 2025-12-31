@@ -215,7 +215,9 @@ mod tests {
                 let block_index = block_index.unwrap();
                 block_index == 0
             })
-            .collect();
+            .await
+            .collect()
+            .await;
 
         let expected_is_hole = [
             true, true, false, false, true, true, false, false, true, true,

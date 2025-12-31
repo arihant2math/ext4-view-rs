@@ -9,7 +9,6 @@
 mod ext2;
 mod ext3;
 mod ext4;
-mod file;
 mod label;
 mod path;
 mod uuid;

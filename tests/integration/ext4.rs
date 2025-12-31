@@ -22,17 +22,6 @@ async fn test_ext4_debug() {
     assert!(s.ends_with(", .. }"));
 }
 
-#[cfg(feature = "std")]
-#[tokio::test]
-async fn test_load_path_error() {
-    assert!(matches!(
-        Ext4::load_from_path(std::path::Path::new("/really/does/not/exist"))
-            .await
-            .unwrap_err(),
-        Ext4Error::Io(_)
-    ));
-}
-
 #[tokio::test]
 async fn test_canonicalize() {
     let fs = load_test_disk1().await;
@@ -321,7 +310,9 @@ async fn test_direntry_debug() {
         .await
         .unwrap()
         .map(|e| e.unwrap())
+        .await
         .find(|e| e.file_name() == "small_file")
+        .await
         .unwrap();
     assert_eq!(format!("{:?}", entry.path()), r#""/small_file""#);
     assert_eq!(format!("{entry:?}"), r#"DirEntry("/small_file")"#);

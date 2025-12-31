@@ -13,19 +13,19 @@ use crate::inode::InodeMode;
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Metadata {
     /// Size in bytes of the file data.
-    pub(crate) size_in_bytes: u64,
+    pub size_in_bytes: u64,
 
     /// Raw permissions and file type.
-    pub(crate) mode: InodeMode,
+    pub mode: InodeMode,
 
     /// File type parsed from the `mode` bitfield.
-    pub(crate) file_type: FileType,
+    pub file_type: FileType,
 
     /// Owner user ID.
-    pub(crate) uid: u32,
+    pub uid: u32,
 
     /// Owner group ID.
-    pub(crate) gid: u32,
+    pub gid: u32,
 }
 
 impl Metadata {

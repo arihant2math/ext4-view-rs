@@ -14,7 +14,7 @@ use crate::inode::{Inode, InodeIndex};
 use crate::metadata::Metadata;
 use crate::path::{Path, PathBuf};
 use crate::util::{read_u16le, read_u32le};
-use alloc::rc::Rc;
+use alloc::sync::Arc;
 use core::error::Error;
 use core::fmt::{self, Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
@@ -207,14 +207,14 @@ pub struct DirEntry {
     fs: Ext4,
 
     /// Number of the inode that this entry points to.
-    pub(crate) inode: InodeIndex,
+    pub inode: InodeIndex,
 
     /// Raw name of the entry.
     name: DirEntryNameBuf,
 
     /// Path that `read_dir` was called with. This is shared via `Rc` so
     /// that only one allocation is required.
-    path: Rc<PathBuf>,
+    path: Arc<PathBuf>,
 
     /// Entry file type.
     file_type: FileType,
@@ -238,7 +238,7 @@ impl DirEntry {
         fs: Ext4,
         bytes: &[u8],
         inode: InodeIndex,
-        path: Rc<PathBuf>,
+        path: Arc<PathBuf>,
     ) -> Result<(Option<Self>, NonZero<usize>), Ext4Error> {
         const NAME_OFFSET: usize = 8;
 
@@ -472,7 +472,7 @@ mod tests {
 
         let inode1 = InodeIndex::new(1).unwrap();
         let inode2 = InodeIndex::new(2).unwrap();
-        let path = Rc::new(PathBuf::new("path"));
+        let path = Arc::new(PathBuf::new("path"));
 
         // Read a normal entry.
         let mut bytes = Vec::new();

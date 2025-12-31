@@ -28,7 +28,7 @@ pub(crate) type InodeIndex = NonZeroU32;
 bitflags! {
     /// Inode flags.
     #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-    pub(crate) struct InodeFlags: u32 {
+    pub struct InodeFlags: u32 {
         /// File is immutable.
         const IMMUTABLE = 0x10;
 
@@ -63,7 +63,7 @@ bitflags! {
     /// The mode bitfield stores file permissions in the lower bits and
     /// file type in the upper bits.
     #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-    pub(crate) struct InodeMode: u16 {
+    pub struct InodeMode: u16 {
         const S_IXOTH = 0x0001;
         const S_IWOTH = 0x0002;
         const S_IROTH = 0x0004;
@@ -93,22 +93,22 @@ bitflags! {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct Inode {
+pub struct Inode {
     /// This inode's index.
-    pub(crate) index: InodeIndex,
+    pub index: InodeIndex,
 
     /// Various kinds of file data can be stored within the inode, including:
     /// * The root node of the extent tree.
     /// * Target path for symlinks.
-    pub(crate) inline_data: [u8; Self::INLINE_DATA_LEN],
+    pub inline_data: [u8; Self::INLINE_DATA_LEN],
 
-    pub(crate) metadata: Metadata,
+    pub metadata: Metadata,
 
     /// Internal inode flags.
-    pub(crate) flags: InodeFlags,
+    pub flags: InodeFlags,
 
     /// Checksum seed used in various places.
-    pub(crate) checksum_base: Checksum,
+    pub checksum_base: Checksum,
 
     /// Number of blocks in the file (including holes).
     file_size_in_blocks: u32,
@@ -213,7 +213,7 @@ impl Inode {
     }
 
     /// Read an inode.
-    pub(crate) async fn read(
+    pub async fn read(
         ext4: &Ext4,
         inode: InodeIndex,
     ) -> Result<Self, Ext4Error> {
@@ -260,7 +260,7 @@ impl Inode {
         Ok(inode)
     }
 
-    pub(crate) async fn symlink_target(
+    pub async fn symlink_target(
         &self,
         ext4: &Ext4,
     ) -> Result<PathBuf, Ext4Error> {
@@ -300,7 +300,7 @@ impl Inode {
     ///
     /// Ext4 allows at most `2^32` blocks in a file. Returns
     /// `CorruptKind::TooManyBlocksInFile` if that limit is exceeded.
-    pub(crate) fn file_size_in_blocks(&self) -> u32 {
+    pub fn file_size_in_blocks(&self) -> u32 {
         self.file_size_in_blocks
     }
 }

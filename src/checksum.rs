@@ -26,7 +26,7 @@ use core::fmt::{self, Debug, Formatter};
 /// the superblock. The checksum seed is derived from the filesystem's
 /// initial UUID.
 #[derive(Clone)]
-pub(crate) struct Checksum {
+pub struct Checksum {
     digest: crc::Digest<'static, u32>,
 }
 

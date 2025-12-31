@@ -16,7 +16,7 @@ use crate::inode::{Inode, InodeFlags, InodeIndex};
 use crate::iters::AsyncIterator;
 use crate::iters::file_blocks::FileBlocks;
 use crate::path::PathBuf;
-use alloc::rc::Rc;
+use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::{self, Debug, Formatter};
@@ -30,7 +30,7 @@ pub struct ReadDir {
     ///
     /// Note that this path may be empty, e.g. if `read_dir` was called
     /// with an inode rather than a path.
-    path: Rc<PathBuf>,
+    path: Arc<PathBuf>,
 
     /// Iterator over the blocks of the directory.
     file_blocks: FileBlocks,
@@ -66,7 +66,7 @@ pub struct ReadDir {
 }
 
 impl ReadDir {
-    pub(crate) fn new(
+    pub fn new(
         fs: Ext4,
         inode: &Inode,
         path: PathBuf,
@@ -79,7 +79,7 @@ impl ReadDir {
 
         Ok(Self {
             fs: fs.clone(),
-            path: Rc::new(path),
+            path: Arc::new(path),
             file_blocks: FileBlocks::new(fs.clone(), inode)?,
             block_index: None,
             is_first_block: true,
@@ -185,7 +185,9 @@ mod tests {
         let entries: Vec<_> = ReadDir::new(fs, &root_inode, root_path)
             .unwrap()
             .map(|e| e.unwrap())
-            .collect();
+            .await
+            .collect()
+            .await;
 
         // Check for a few expected entries.
         assert!(entries.iter().any(|e| e.file_name() == "."));

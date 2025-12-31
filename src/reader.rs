@@ -23,32 +23,17 @@ use {
 ///
 /// [`Ext4`]: crate::Ext4
 #[async_trait]
-pub trait Ext4Read {
+pub trait Ext4Read: Send + Sync {
     /// Read bytes into `dst`, starting at `start_byte`.
     ///
     /// Exactly `dst.len()` bytes will be read; an error will be
     /// returned if there is not enough data to fill `dst`, or if the
     /// data cannot be read for any reason.
     async fn read(
-        &mut self,
+        &self,
         start_byte: u64,
         dst: &mut [u8],
     ) -> Result<(), BoxedError>;
-}
-
-#[cfg(feature = "std")]
-impl Ext4Read for File {
-    fn read(
-        &mut self,
-        start_byte: u64,
-        dst: &mut [u8],
-    ) -> Result<(), BoxedError> {
-        use std::io::Read;
-
-        self.seek(SeekFrom::Start(start_byte)).map_err(Box::new)?;
-        self.read_exact(dst).map_err(Box::new)?;
-        Ok(())
-    }
 }
 
 /// Error type used by the [`Vec<u8>`] impl of [`Ext4Read`].
@@ -74,7 +59,7 @@ impl Error for MemIoError {}
 #[async_trait]
 impl Ext4Read for Vec<u8> {
     async fn read(
-        &mut self,
+        &self,
         start_byte: u64,
         dst: &mut [u8],
     ) -> Result<(), BoxedError> {
@@ -104,7 +89,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_vec_read() {
-        let mut src = vec![1, 2, 3];
+        let src = vec![1, 2, 3];
 
         let mut dst = [0; 3];
         src.read(0, &mut dst).await.unwrap();

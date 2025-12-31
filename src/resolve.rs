@@ -13,7 +13,7 @@ use alloc::vec::Vec;
 
 /// How symlinks are treated when looking up an inode.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FollowSymlinks {
+pub enum FollowSymlinks {
     /// All symlinks are followed.
     All,
 
