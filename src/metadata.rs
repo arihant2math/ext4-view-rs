@@ -9,6 +9,8 @@
 use crate::file_type::FileType;
 use crate::inode::InodeMode;
 
+use core::time::Duration;
+
 /// Metadata information about a file.
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Metadata {
@@ -26,6 +28,18 @@ pub struct Metadata {
 
     /// Owner group ID.
     pub gid: u32,
+
+    /// Access time.
+    pub atime: Duration,
+
+    /// Creation time.
+    pub ctime: Duration,
+
+    /// Delete time.
+    pub dtime: Duration,
+
+    /// Modification time.
+    pub mtime: Duration,
 }
 
 impl Metadata {

@@ -96,6 +96,9 @@ pub enum Ext4Error {
 
     /// The filesystem is corrupt in some way.
     Corrupt(Corrupt),
+
+    /// The filesystem is read-only.
+    Readonly,
 }
 
 impl Ext4Error {
@@ -134,6 +137,7 @@ impl Display for Ext4Error {
             Self::Io(err) => write!(f, "io error: {err}"),
             Self::Incompatible(i) => write!(f, "incompatible filesystem: {i}"),
             Self::Corrupt(c) => write!(f, "corrupt filesystem: {c}"),
+            Self::Readonly => write!(f, "filesystem is read-only"),
         }
     }
 }
@@ -164,6 +168,7 @@ impl From<Ext4Error> for std::io::Error {
             Ext4Error::NotFound => NotFound.into(),
             Ext4Error::NotUtf8 => InvalidData.into(),
             Ext4Error::Encrypted => PermissionDenied.into(),
+            Ext4Error::Readonly => PermissionDenied.into(),
         }
     }
 }

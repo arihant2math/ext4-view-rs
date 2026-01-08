@@ -212,9 +212,7 @@ impl Ext4 {
     ///
     /// This reads and validates the superblock, block group
     /// descriptors, and journal. No other data is read.
-    pub async fn load(
-        reader: Box<dyn Ext4Read>,
-    ) -> Result<Self, Ext4Error> {
+    pub async fn load(reader: Box<dyn Ext4Read>) -> Result<Self, Ext4Error> {
         Self::load_with_writer(reader, None).await
     }
 
@@ -244,7 +242,7 @@ impl Ext4 {
                 &superblock,
                 &mut *reader,
             )
-                .await?,
+            .await?,
             reader,
             writer,
             superblock,

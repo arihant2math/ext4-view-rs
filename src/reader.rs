@@ -16,6 +16,7 @@ use core::fmt::{self, Display, Formatter};
 use {
     std::fs::File,
     std::io::{Seek, SeekFrom},
+    std::sync::Mutex,
 };
 
 /// Interface used by [`Ext4`] to read the filesystem data from a storage
@@ -45,7 +46,7 @@ pub trait Ext4Read: Send + Sync {
 pub trait Ext4Write: Send + Sync {
     /// Write bytes from `src`, starting at `start_byte`.
     async fn write(
-        &mut self,
+        &self,
         start_byte: u64,
         src: &[u8],
     ) -> Result<(), BoxedError>;
@@ -89,18 +90,20 @@ impl Ext4Read for Vec<u8> {
     }
 }
 
+#[cfg(feature = "std")]
 #[async_trait]
-impl Ext4Write for Vec<u8> {
+impl Ext4Write for Mutex<Vec<u8>> {
     async fn write(
-        &mut self,
+        &self,
         start_byte: u64,
         src: &[u8],
     ) -> Result<(), BoxedError> {
-        write_to_bytes(self, start_byte, src).ok_or_else(|| {
+        let mut guard = self.lock().unwrap();
+        write_to_bytes(guard.as_mut(), start_byte, src).ok_or_else(|| {
             Box::new(MemIoError {
                 start: start_byte,
                 read_len: src.len(),
-                src_len: self.len(),
+                src_len: guard.len(),
             })
             .into()
         })
@@ -116,11 +119,7 @@ fn read_from_bytes(src: &[u8], start_byte: u64, dst: &mut [u8]) -> Option<()> {
     Some(())
 }
 
-fn write_to_bytes(
-    dst: &mut [u8],
-    start_byte: u64,
-    src: &[u8],
-) -> Option<()> {
+fn write_to_bytes(dst: &mut [u8], start_byte: u64, src: &[u8]) -> Option<()> {
     let start = usize::try_from(start_byte).ok()?;
     let end = start.checked_add(src.len())?;
     let dst = dst.get_mut(start..end)?;
