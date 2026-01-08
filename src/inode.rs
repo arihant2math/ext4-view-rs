@@ -17,8 +17,10 @@ use crate::util::{
     read_u16le, read_u32le, u32_from_hilo, u64_from_hilo, usize_from_u32,
 };
 use alloc::vec;
+use alloc::vec::Vec;
 use bitflags::bitflags;
 use core::num::NonZeroU32;
+use core::time::Duration;
 
 /// Inode index.
 ///
@@ -92,6 +94,14 @@ bitflags! {
     }
 }
 
+fn timestamp_to_duration(timestamp: u32, high: Option<u32>) -> Duration {
+    if timestamp == u32::MAX {
+        panic!("timestamp overflow");
+    }
+    // TODO: nanosecond precision
+    Duration::from_secs(u64::from(timestamp))
+}
+
 #[derive(Clone, Debug)]
 pub struct Inode {
     /// This inode's index.
@@ -102,7 +112,11 @@ pub struct Inode {
     /// * Target path for symlinks.
     pub inline_data: [u8; Self::INLINE_DATA_LEN],
 
+    /// Metadata about the file.
     pub metadata: Metadata,
+
+    /// Full inode data as read from disk.
+    pub inode_data: Vec<u8>,
 
     /// Internal inode flags.
     pub flags: InodeFlags,
@@ -152,6 +166,10 @@ impl Inode {
         let i_mode = read_u16le(data, 0x0);
         let i_uid = read_u16le(data, 0x2);
         let i_size_lo = read_u32le(data, 0x4);
+        let i_atime = read_u32le(data, 0x8);
+        let i_ctime = read_u32le(data, 0xc);
+        let i_mtime = read_u32le(data, 0x10);
+        let i_dtime = read_u32le(data, 0x14);
         let i_gid = read_u16le(data, 0x18);
         let i_flags = read_u32le(data, 0x20);
         // OK to unwrap: already checked the length.
@@ -200,10 +218,15 @@ impl Inode {
                     mode,
                     uid,
                     gid,
+                    atime: timestamp_to_duration(i_atime, None),
+                    ctime: timestamp_to_duration(i_ctime, None),
+                    dtime: timestamp_to_duration(i_dtime, None),
                     file_type: FileType::try_from(mode).map_err(|_| {
                         CorruptKind::InodeFileType { inode: index, mode }
                     })?,
+                    mtime: timestamp_to_duration(i_mtime, None),
                 },
+                inode_data: data.to_vec(),
                 flags: InodeFlags::from_bits_retain(i_flags),
                 checksum_base,
                 file_size_in_blocks,
@@ -258,6 +281,102 @@ impl Inode {
         }
 
         Ok(inode)
+    }
+
+    fn update_inode_data(&mut self, ext4: &Ext4) {
+        // i_mode
+        self.inode_data[0x0..0x2]
+            .copy_from_slice(&self.metadata.mode.bits().to_le_bytes());
+        // i_uid
+        self.inode_data[0x2..0x4]
+            .copy_from_slice(&(self.metadata.uid as u16).to_le_bytes());
+        // i_size_lo
+        self.inode_data[0x4..0x8].copy_from_slice(
+            &u32::try_from(self.metadata.size_in_bytes)
+                .unwrap_or(0)
+                .to_le_bytes(),
+        );
+        // i_atime
+        if self.metadata.atime.as_secs() > u32::MAX as u64 {
+            panic!("atime overflow");
+        }
+        self.inode_data[0x8..0xc].copy_from_slice(
+            &(self.metadata.atime.as_secs() as u32).to_le_bytes(),
+        );
+        // i_ctime
+        if self.metadata.ctime.as_secs() > u32::MAX as u64 {
+            panic!("ctime overflow");
+        }
+        self.inode_data[0xc..0x10].copy_from_slice(
+            &(self.metadata.ctime.as_secs() as u32).to_le_bytes(),
+        );
+        // i_mtime
+        if self.metadata.mtime.as_secs() > u32::MAX as u64 {
+            panic!("mtime overflow");
+        }
+        self.inode_data[0x10..0x14].copy_from_slice(
+            &(self.metadata.mtime.as_secs() as u32).to_le_bytes(),
+        );
+        // i_dtime
+        if self.metadata.dtime.as_secs() > u32::MAX as u64 {
+            panic!("dtime overflow");
+        }
+        self.inode_data[0x14..0x18].copy_from_slice(
+            &(self.metadata.dtime.as_secs() as u32).to_le_bytes(),
+        );
+        // i_gid
+        self.inode_data[0x18..0x1a]
+            .copy_from_slice(&(self.metadata.gid as u16).to_le_bytes());
+        // i_flags
+        self.inode_data[0x20..0x24]
+            .copy_from_slice(&self.flags.bits().to_le_bytes());
+        // i_size_hi
+        self.inode_data[0x6c..0x70].copy_from_slice(
+            &((self.metadata.size_in_bytes >> 32) as u32).to_le_bytes(),
+        );
+        // TODO: update other fields as need
+        if ext4.has_metadata_checksums() {
+            let mut checksum = self.checksum_base.clone();
+            // Up to the l_i_checksum_lo field.
+            checksum.update(&self.inode_data[..Self::L_I_CHECKSUM_LO_OFFSET]);
+            // Zero'd field.
+            checksum.update_u16_le(0);
+            // Up to the i_checksum_hi field.
+            checksum.update(
+                &self.inode_data[Self::L_I_CHECKSUM_LO_OFFSET + 2
+                    ..Self::I_CHECKSUM_HI_OFFSET],
+            );
+            // Zero'd field.
+            checksum.update_u16_le(0);
+            // Rest of the inode.
+            checksum.update(&self.inode_data[Self::I_CHECKSUM_HI_OFFSET + 2..]);
+            let final_checksum = checksum.finalize();
+            self.inode_data[Self::L_I_CHECKSUM_LO_OFFSET
+                ..Self::L_I_CHECKSUM_LO_OFFSET + 2]
+                .copy_from_slice(&(final_checksum as u16).to_le_bytes());
+            self.inode_data
+                [Self::I_CHECKSUM_HI_OFFSET..Self::I_CHECKSUM_HI_OFFSET + 2]
+                .copy_from_slice(
+                    &((final_checksum >> 16) as u16).to_le_bytes(),
+                );
+        }
+    }
+
+    /// Write the inode back to disk.
+    pub async fn write(&mut self, ext4: &Ext4) -> Result<(), Ext4Error> {
+        let (block_index, offset_within_block) =
+            get_inode_location(ext4, self.index)?;
+        let block_size = ext4.0.superblock.block_size.to_u64();
+        let pos = u64::from(block_index) * block_size
+            + u64::from(offset_within_block);
+        self.update_inode_data(ext4);
+        // Write only the data we've saved to avoid overwriting any unread info
+        let writer = ext4.0.writer.as_ref().ok_or(Ext4Error::Readonly)?;
+        writer
+            .write(pos, &self.inode_data)
+            .await
+            .map_err(|e| Ext4Error::Io(e))?;
+        Ok(())
     }
 
     pub async fn symlink_target(
