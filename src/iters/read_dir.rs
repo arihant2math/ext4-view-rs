@@ -66,6 +66,7 @@ pub struct ReadDir {
 }
 
 impl ReadDir {
+    /// Create a new `ReadDir` iterator for the given directory `inode` at `path`.
     pub fn new(
         fs: Ext4,
         inode: &Inode,

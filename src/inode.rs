@@ -379,6 +379,7 @@ impl Inode {
         Ok(())
     }
 
+    /// Get the target path of a symlink inode.
     pub async fn symlink_target(
         &self,
         ext4: &Ext4,

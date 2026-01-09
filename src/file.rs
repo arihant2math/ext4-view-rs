@@ -75,6 +75,16 @@ impl File {
         &self.inode.metadata
     }
 
+    /// Set the file metadata.
+    #[must_use]
+    pub async fn set_metadata(
+        &mut self,
+        metadata: Metadata,
+    ) -> Result<(), Ext4Error> {
+        self.inode.metadata = metadata;
+        self.inode.write(&self.fs).await
+    }
+
     /// Read bytes from the file into `buf`, returning how many bytes
     /// were read. The number may be smaller than the length of the
     /// input buffer.
@@ -196,6 +206,21 @@ impl File {
             self.position.checked_add(u64::from(buf_len_u32)).unwrap();
 
         Ok(buf.len())
+    }
+
+    /// Write bytes from `buf` into the file, returning how many bytes
+    /// were written. The number may be smaller than the length of the
+    /// input buffer.
+    pub async fn write_bytes(
+        &mut self,
+        buf: &[u8],
+    ) -> Result<usize, Ext4Error> {
+        // Don't write outside the current end of the file.
+        if self.position + buf.len() as u64 >= self.inode.metadata.size_in_bytes
+        {
+            return Err(Ext4Error::Readonly);
+        }
+        todo!();
     }
 
     /// Current position within the file.

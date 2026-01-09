@@ -378,6 +378,23 @@ pub(crate) enum CorruptKind {
         read_len: usize,
     },
 
+    /// Invalid read of a block.
+    BlockWrite {
+        /// Absolute block index.
+        block_index: FsBlockIndex,
+
+        /// Absolute block index, without remapping from the journal. If
+        /// this block was not remapped by the journal, this field will
+        /// be the same as `block_index`.
+        original_block_index: FsBlockIndex,
+
+        /// Offset in bytes within the block.
+        offset_within_block: u32,
+
+        /// Length in bytes of the read.
+        write_len: usize,
+    },
+
     /// Attempting to read too much data in the block cache.
     BlockCacheReadTooLarge {
         num_blocks: u32,
@@ -576,6 +593,17 @@ impl Display for CorruptKind {
                 write!(
                     f,
                     "invalid read of length {read_len} from block {block_index} (originally {original_block_index}) at offset {offset_within_block}"
+                )
+            }
+            Self::BlockWrite {
+                block_index,
+                original_block_index,
+                offset_within_block,
+                write_len,
+            } => {
+                write!(
+                    f,
+                    "invalid write of length {write_len} to block {block_index} (originally {original_block_index}) at offset {offset_within_block}"
                 )
             }
             Self::BlockCacheReadTooLarge {
