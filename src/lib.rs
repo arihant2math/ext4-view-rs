@@ -169,7 +169,7 @@ pub use iters::{AsyncFilter, AsyncIterator, AsyncMap, AsyncSkip};
 pub use label::Label;
 pub use metadata::Metadata;
 pub use path::{Component, Components, Path, PathBuf, PathError};
-pub use reader::{Ext4Read, MemIoError};
+pub use reader::{Ext4Read, Ext4Write, MemIoError};
 pub use resolve::FollowSymlinks;
 pub use uuid::Uuid;
 
@@ -193,6 +193,8 @@ struct Ext4Inner {
     /// reference. `RefCell` enforces at runtime that only one mutable
     /// borrow exists at a time.
     reader: Box<dyn Ext4Read>,
+    /// Optional writer providing write access to the underlying storage.
+    writer: Option<Box<dyn Ext4Write>>,
 }
 
 /// Read-only access to an [ext4] filesystem.
@@ -210,8 +212,17 @@ impl Ext4 {
     ///
     /// This reads and validates the superblock, block group
     /// descriptors, and journal. No other data is read.
-    pub async fn load(
+    pub async fn load(reader: Box<dyn Ext4Read>) -> Result<Self, Ext4Error> {
+        Self::load_with_writer(reader, None).await
+    }
+
+    /// Load an `Ext4` instance from the given `reader` and `writer`.
+    ///
+    /// This reads and validates the superblock, block group
+    /// descriptors, and journal. No other data is read or written.
+    pub async fn load_with_writer(
         mut reader: Box<dyn Ext4Read>,
+        writer: Option<Box<dyn Ext4Write>>,
     ) -> Result<Self, Ext4Error> {
         // The first 1024 bytes are reserved for "weird" stuff like x86
         // boot sectors.
@@ -233,6 +244,7 @@ impl Ext4 {
             )
             .await?,
             reader,
+            writer,
             superblock,
             // Initialize with an empty journal, because loading the
             // journal requires a valid `Ext4` object.
