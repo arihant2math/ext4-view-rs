@@ -75,6 +75,16 @@ impl File {
         &self.inode.metadata
     }
 
+    /// Set the file metadata.
+    #[must_use]
+    pub async fn set_metadata(
+        &mut self,
+        metadata: Metadata,
+    ) -> Result<(), Ext4Error> {
+        self.inode.metadata = metadata;
+        self.inode.write(&self.fs).await
+    }
+
     /// Read bytes from the file into `buf`, returning how many bytes
     /// were read. The number may be smaller than the length of the
     /// input buffer.
@@ -196,6 +206,85 @@ impl File {
             self.position.checked_add(u64::from(buf_len_u32)).unwrap();
 
         Ok(buf.len())
+    }
+
+    /// Write bytes from `buf` into the file, returning how many bytes
+    /// were written. The number may be smaller than the length of the
+    /// input buffer.
+    pub async fn write_bytes(
+        &mut self,
+        buf: &[u8],
+    ) -> Result<usize, Ext4Error> {
+        // Nothing to do if input buffer is empty.
+        if buf.is_empty() {
+            return Ok(0);
+        }
+
+        // Don't write outside the current end of the file.
+        if self.position >= self.inode.metadata.size_in_bytes {
+            return Err(Ext4Error::Readonly);
+        }
+        let bytes_remaining = self
+            .inode
+            .metadata
+            .size_in_bytes
+            .checked_sub(self.position)
+            .unwrap();
+
+        // Determine how many bytes we are allowed to write, capped by file size.
+        let mut write_len = buf.len();
+        if let Ok(bytes_remaining_usize) = usize::try_from(bytes_remaining) {
+            if write_len > bytes_remaining_usize {
+                write_len = bytes_remaining_usize;
+            }
+        }
+
+        let block_size = self.fs.0.superblock.block_size;
+
+        // Get the block to write to.
+        let block_index = if let Some(block_index) = self.block_index {
+            block_index
+        } else {
+            // We're not at EOF due to the check above, so next block must exist.
+            let block_index = self.file_blocks.next().await.unwrap()?;
+            self.block_index = Some(block_index);
+            block_index
+        };
+
+        // Refuse to write into holes; scope is only to change already allocated blocks.
+        if block_index == 0 {
+            return Err(Ext4Error::Readonly);
+        }
+
+        // Offset within the current block.
+        let offset_within_block: u32 =
+            u32::try_from(self.position % block_size.to_nz_u64()).unwrap();
+
+        // Cap write to remaining bytes in this block.
+        let bytes_remaining_in_block: u32 = block_size
+            .to_u32()
+            .checked_sub(offset_within_block)
+            .unwrap();
+        if write_len > usize_from_u32(bytes_remaining_in_block) {
+            write_len = usize_from_u32(bytes_remaining_in_block);
+        }
+
+        // Perform the write for the capped portion.
+        let to_write = &buf[..write_len];
+        self.fs
+            .write_to_block(block_index, offset_within_block, to_write)
+            .await?;
+
+        // Update position and block iterator state.
+        let new_offset_within_block: u32 =
+            offset_within_block.checked_add(write_len as u32).unwrap();
+        if new_offset_within_block >= block_size {
+            // Move to next block on subsequent calls.
+            self.block_index = None;
+        }
+        self.position = self.position.checked_add(write_len as u64).unwrap();
+
+        Ok(write_len)
     }
 
     /// Current position within the file.

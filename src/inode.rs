@@ -94,7 +94,7 @@ bitflags! {
     }
 }
 
-fn timestamp_to_duration(timestamp: u32, high: Option<u32>) -> Duration {
+fn timestamp_to_duration(timestamp: u32, _high: Option<u32>) -> Duration {
     if timestamp == u32::MAX {
         panic!("timestamp overflow");
     }
@@ -102,6 +102,7 @@ fn timestamp_to_duration(timestamp: u32, high: Option<u32>) -> Duration {
     Duration::from_secs(u64::from(timestamp))
 }
 
+/// An inode within an Ext4 filesystem.
 #[derive(Clone, Debug)]
 pub struct Inode {
     /// This inode's index.
@@ -283,7 +284,7 @@ impl Inode {
         Ok(inode)
     }
 
-    fn update_inode_data(&mut self, ext4: &Ext4) {
+    pub(crate) fn update_inode_data(&mut self, ext4: &Ext4) {
         // i_mode
         self.inode_data[0x0..0x2]
             .copy_from_slice(&self.metadata.mode.bits().to_le_bytes());
@@ -367,7 +368,7 @@ impl Inode {
         let (block_index, offset_within_block) =
             get_inode_location(ext4, self.index)?;
         let block_size = ext4.0.superblock.block_size.to_u64();
-        let pos = u64::from(block_index) * block_size
+        let pos = block_index * block_size
             + u64::from(offset_within_block);
         self.update_inode_data(ext4);
         // Write only the data we've saved to avoid overwriting any unread info
@@ -375,10 +376,11 @@ impl Inode {
         writer
             .write(pos, &self.inode_data)
             .await
-            .map_err(|e| Ext4Error::Io(e))?;
+            .map_err(Ext4Error::Io)?;
         Ok(())
     }
 
+    /// Get the target path of a symlink inode.
     pub async fn symlink_target(
         &self,
         ext4: &Ext4,

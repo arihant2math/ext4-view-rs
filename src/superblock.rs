@@ -341,7 +341,7 @@ mod tests {
             include_bytes!("../test_data/raw_superblock.bin").to_vec();
         // Modify a reserved byte. Nothing currently uses this data, but
         // it is still part of the checksum.
-        data[0x284] = 0xff;
+        data[0x3f0] ^= 0xff;
         assert_eq!(
             Superblock::from_bytes(&data).unwrap_err(),
             CorruptKind::SuperblockChecksum
