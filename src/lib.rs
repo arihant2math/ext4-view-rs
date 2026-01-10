@@ -20,27 +20,28 @@
 //! looks at files and directories in the filesystem.
 //!
 //! ```
-//! use ext4_view::{Ext4, Ext4Error, Metadata};
+//! use ext4_view::{AsyncIterator, Ext4, Ext4Error, Metadata};
 //!
-//! fn in_memory_example(fs_data: Vec<u8>) -> Result<(), Ext4Error> {
-//!     let fs = Ext4::load(Box::new(fs_data)).unwrap();
+//! #[tokio::main]
+//! async fn in_memory_example(fs_data: Vec<u8>) -> Result<(), Ext4Error> {
+//!     let fs = Ext4::load(Box::new(fs_data)).await.unwrap();
 //!
 //!     let path = "/some/file";
 //!
 //!     // Read a file's contents.
-//!     let file_data: Vec<u8> = fs.read(path)?;
+//!     let file_data: Vec<u8> = fs.read(path).await?;
 //!
 //!     // Read a file's contents as a string.
-//!     let file_str: String = fs.read_to_string(path)?;
+//!     let file_str: String = fs.read_to_string(path).await?;
 //!
 //!     // Check whether a path exists.
-//!     let exists: bool = fs.exists(path)?;
+//!     let exists: bool = fs.exists(path).await?;
 //!
 //!     // Get metadata (file type, permissions, etc).
-//!     let metadata: Metadata = fs.metadata(path)?;
+//!     let metadata: Metadata = fs.metadata(path).await?;
 //!
 //!     // Print each entry in a directory.
-//!     for entry in fs.read_dir("/some/dir")? {
+//!     for entry in fs.read_dir("/some/dir").await?.collect().await {
 //!         let entry = entry?;
 //!         println!("{}", entry.path().display());
 //!     }
@@ -107,7 +108,6 @@
 
 extern crate alloc;
 
-mod block_cache;
 mod block_group;
 mod block_index;
 mod block_size;
@@ -143,12 +143,9 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
-use block_cache::BlockCache;
 use block_group::BlockGroupDescriptor;
 use block_index::FsBlockIndex;
-use core::cell::UnsafeCell;
 use core::fmt::{self, Debug, Formatter};
-use core::sync::atomic::AtomicBool;
 use error::CorruptKind;
 use features::ReadOnlyCompatibleFeatures;
 use inode::InodeIndex;
@@ -177,8 +174,6 @@ struct Ext4Inner {
     superblock: Superblock,
     block_group_descriptors: Vec<BlockGroupDescriptor>,
     journal: Journal,
-    block_cache_lock: AtomicBool,
-    block_cache: UnsafeCell<BlockCache>,
 
     /// Reader providing access to the underlying storage.
     ///
@@ -234,8 +229,6 @@ impl Ext4 {
             .map_err(Ext4Error::Io)?;
 
         let superblock = Superblock::from_bytes(&data)?;
-        let block_cache =
-            BlockCache::new(superblock.block_size, superblock.blocks_count)?;
 
         let mut fs = Self(Arc::new(Ext4Inner {
             block_group_descriptors: BlockGroupDescriptor::read_all(
@@ -249,8 +242,6 @@ impl Ext4 {
             // Initialize with an empty journal, because loading the
             // journal requires a valid `Ext4` object.
             journal: Journal::empty(),
-            block_cache_lock: AtomicBool::new(false),
-            block_cache: UnsafeCell::new(block_cache),
         }));
 
         // Load the actual journal, if present.
@@ -349,26 +340,75 @@ impl Ext4 {
             return Err(err());
         }
 
-        // Acquire block cache lock
-        while let Err(_) = self.0.block_cache_lock.compare_exchange(
-            false,
-            true,
-            core::sync::atomic::Ordering::Acquire,
-            core::sync::atomic::Ordering::Relaxed,
-        ) {}
-
-        let block_cache = unsafe { self.0.block_cache.get().as_mut().unwrap() };
-        let cached_block = block_cache
-            .get_or_insert_blocks_async(block_index, || self.0.clone(), err)
-            .await?;
-
-        dst.copy_from_slice(
-            &cached_block[usize_from_u32(offset_within_block)..read_end],
-        );
-        // Release block cache lock
+        // Read the block
         self.0
-            .block_cache_lock
-            .store(false, core::sync::atomic::Ordering::Release);
+            .reader
+            .read(
+                block_index as u64 * self.0.superblock.block_size.to_u64()
+                    + offset_within_block as u64,
+                dst,
+            )
+            .await
+            .map_err(Ext4Error::Io)?;
+        Ok(())
+    }
+
+    /// Write data to a block.
+    async fn write_to_block(
+        &self,
+        original_block_index: FsBlockIndex,
+        offset_within_block: u32,
+        src: &[u8],
+    ) -> Result<(), Ext4Error> {
+        let block_index = self.0.journal.map_block_index(original_block_index);
+
+        let err = || {
+            Ext4Error::from(CorruptKind::BlockWrite {
+                block_index,
+                original_block_index,
+                offset_within_block,
+                write_len: src.len(),
+            })
+        };
+        // The first 1024 bytes are reserved for non-filesystem
+        // data. This conveniently allows for something like a null
+        // pointer check.
+        if block_index == 0 && offset_within_block < 1024 {
+            return Err(err());
+        }
+
+        // Check the block index.
+        if block_index >= self.0.superblock.blocks_count {
+            return Err(err());
+        }
+
+        // The start of the write must be less than the block size.
+        let block_size = self.0.superblock.block_size;
+        if offset_within_block >= block_size {
+            return Err(err());
+        }
+
+        // The end of the write must be less than or equal to the block size.
+        let write_end = usize_from_u32(offset_within_block)
+            .checked_add(src.len())
+            .ok_or_else(err)?;
+        if write_end > block_size {
+            return Err(err());
+        }
+
+        // Write through to underlying storage
+        if let Some(writer) = &self.0.writer {
+            writer
+                .write(
+                    block_index as u64 * self.0.superblock.block_size.to_u64()
+                        + offset_within_block as u64,
+                    src,
+                )
+                .await
+                .map_err(Ext4Error::Io)?;
+        } else {
+            return Err(Ext4Error::Readonly);
+        }
         Ok(())
     }
 
@@ -865,5 +905,21 @@ mod tests {
         );
 
         // TODO: add deeper paths to the test disk and test here.
+    }
+
+    #[tokio::test]
+    async fn test_inode_equivalence() {
+        let fs = load_test_disk1().await;
+
+        let mut inode = fs
+            .path_to_inode(
+                Path::try_from("/empty_file").unwrap(),
+                FollowSymlinks::All,
+            )
+            .await
+            .unwrap();
+        let data = inode.inode_data.clone();
+        inode.update_inode_data(&fs);
+        assert_eq!(inode.inode_data, data);
     }
 }
