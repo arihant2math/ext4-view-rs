@@ -94,7 +94,7 @@ bitflags! {
     }
 }
 
-fn timestamp_to_duration(timestamp: u32, high: Option<u32>) -> Duration {
+fn timestamp_to_duration(timestamp: u32, _high: Option<u32>) -> Duration {
     if timestamp == u32::MAX {
         panic!("timestamp overflow");
     }
@@ -102,6 +102,7 @@ fn timestamp_to_duration(timestamp: u32, high: Option<u32>) -> Duration {
     Duration::from_secs(u64::from(timestamp))
 }
 
+/// An inode within an Ext4 filesystem.
 #[derive(Clone, Debug)]
 pub struct Inode {
     /// This inode's index.
@@ -375,7 +376,7 @@ impl Inode {
         writer
             .write(pos, &self.inode_data)
             .await
-            .map_err(|e| Ext4Error::Io(e))?;
+            .map_err(Ext4Error::Io)?;
         Ok(())
     }
 
