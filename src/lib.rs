@@ -20,27 +20,28 @@
 //! looks at files and directories in the filesystem.
 //!
 //! ```
-//! use ext4_view::{Ext4, Ext4Error, Metadata};
+//! use ext4_view::{AsyncIterator, Ext4, Ext4Error, Metadata};
 //!
-//! fn in_memory_example(fs_data: Vec<u8>) -> Result<(), Ext4Error> {
-//!     let fs = Ext4::load(Box::new(fs_data)).unwrap();
+//! #[tokio::main]
+//! async fn in_memory_example(fs_data: Vec<u8>) -> Result<(), Ext4Error> {
+//!     let fs = Ext4::load(Box::new(fs_data)).await.unwrap();
 //!
 //!     let path = "/some/file";
 //!
 //!     // Read a file's contents.
-//!     let file_data: Vec<u8> = fs.read(path)?;
+//!     let file_data: Vec<u8> = fs.read(path).await?;
 //!
 //!     // Read a file's contents as a string.
-//!     let file_str: String = fs.read_to_string(path)?;
+//!     let file_str: String = fs.read_to_string(path).await?;
 //!
 //!     // Check whether a path exists.
-//!     let exists: bool = fs.exists(path)?;
+//!     let exists: bool = fs.exists(path).await?;
 //!
 //!     // Get metadata (file type, permissions, etc).
-//!     let metadata: Metadata = fs.metadata(path)?;
+//!     let metadata: Metadata = fs.metadata(path).await?;
 //!
 //!     // Print each entry in a directory.
-//!     for entry in fs.read_dir("/some/dir")? {
+//!     for entry in fs.read_dir("/some/dir").await?.collect().await {
 //!         let entry = entry?;
 //!         println!("{}", entry.path().display());
 //!     }
@@ -342,11 +343,15 @@ impl Ext4 {
         }
 
         // Read the block
-        self.0.reader.read(
-            block_index as u64 * self.0.superblock.block_size.to_u64()
-                + offset_within_block as u64,
-            dst,
-        ).await.map_err(Ext4Error::Io)?;
+        self.0
+            .reader
+            .read(
+                block_index as u64 * self.0.superblock.block_size.to_u64()
+                    + offset_within_block as u64,
+                dst,
+            )
+            .await
+            .map_err(Ext4Error::Io)?;
         Ok(())
     }
 
