@@ -906,4 +906,20 @@ mod tests {
 
         // TODO: add deeper paths to the test disk and test here.
     }
+
+    #[tokio::test]
+    async fn test_inode_equivalence() {
+        let fs = load_test_disk1().await;
+
+        let mut inode = fs
+            .path_to_inode(
+                Path::try_from("/empty_file").unwrap(),
+                FollowSymlinks::All,
+            )
+            .await
+            .unwrap();
+        let data = inode.inode_data.clone();
+        inode.update_inode_data(&fs);
+        assert_eq!(inode.inode_data, data);
+    }
 }

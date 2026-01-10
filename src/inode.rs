@@ -284,7 +284,7 @@ impl Inode {
         Ok(inode)
     }
 
-    fn update_inode_data(&mut self, ext4: &Ext4) {
+    pub(crate) fn update_inode_data(&mut self, ext4: &Ext4) {
         // i_mode
         self.inode_data[0x0..0x2]
             .copy_from_slice(&self.metadata.mode.bits().to_le_bytes());
