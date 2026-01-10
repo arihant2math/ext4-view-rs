@@ -12,6 +12,7 @@ mod ext4;
 mod label;
 mod path;
 mod uuid;
+mod write;
 
 use ext4_view::Ext4;
 
