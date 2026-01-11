@@ -312,6 +312,11 @@ impl File {
 
         Ok(())
     }
+
+    /// Consume the `File`, returning the underlying `Inode`.
+    pub fn into_inode(self) -> Inode {
+        self.inode
+    }
 }
 
 impl Debug for File {
