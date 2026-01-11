@@ -6,10 +6,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use ext4_view::{Ext4, Ext4Error};
+use ext4_view::{Ext4, Ext4Error, FollowSymlinks, Path};
 use tokio;
 
-use super::test_util::load_compressed_filesystem;
+use super::test_util::{load_compressed_filesystem, load_test_disk1};
 
 use async_trait::async_trait;
 use ext4_view::Ext4Read;
@@ -191,4 +191,32 @@ async fn test_write_persists_data() {
     // Read back the file and verify the change persisted.
     let data = fs.read("/small_file").await.unwrap();
     assert!(data.starts_with(b"HELLO"));
+}
+
+#[tokio::test]
+async fn test_inode_modification_time() {
+    let fs = load_fs_shared_rw("test_disk1.bin.zst").await;
+
+    let mut inode = fs
+        .path_to_inode(
+            Path::try_from("/empty_file").unwrap(),
+            FollowSymlinks::All,
+        )
+        .await
+        .unwrap();
+    let new_atime = core::time::Duration::new(6000, 0);
+    let now = core::time::Duration::new(5000, 0);
+    inode.metadata.atime = new_atime;
+    inode.metadata.mtime = now;
+    inode.write(&fs).await.unwrap();
+    // Reload inode to verify change persisted.
+    let reloaded = fs
+        .path_to_inode(
+            Path::try_from("/empty_file").unwrap(),
+            FollowSymlinks::All,
+        )
+        .await
+        .unwrap();
+    assert_eq!(reloaded.metadata.mtime, now);
+    assert_eq!(reloaded.metadata.atime, new_atime);
 }
