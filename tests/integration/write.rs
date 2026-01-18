@@ -158,22 +158,27 @@ async fn test_write_into_hole_is_error() {
 #[tokio::test]
 async fn test_write_caps_to_file_end_and_block_boundary() {
     // Load filesystem with writer.
-    let fs = load_fs_with_writer("test_disk1.bin.zst").await;
+    let fs = load_fs_shared_rw("test_disk1.bin.zst").await;
 
     // Small file is "hello, world!" (13 bytes) and fits in a single block.
     let mut file = fs.open("/small_file").await.unwrap();
 
     // Seek near end and attempt to write more than remaining.
-    file.seek_to(10).await.unwrap();
-    let written = file.write_bytes(b"ABCDEFGHIJ").await.unwrap();
+    file.seek_to(12).await.unwrap();
+    let written = file.write_bytes(b". We're writing").await.unwrap();
 
-    // Only 3 bytes should be written to reach file size (no extension).
-    assert_eq!(written, 3);
-    assert_eq!(file.position(), 13);
-
-    // Now at EOF: subsequent writes should error Readonly.
-    let err = file.write_bytes(b"Z").await.unwrap_err();
-    assert!(matches!(err, Ext4Error::Readonly));
+    // Everything should be written up
+    assert_eq!(written, 15);
+    assert_eq!(file.position(), 27);
+    file.seek_to(0).await.unwrap();
+    // Verify file contents
+    let mut buf = vec![0u8; 27];
+    let n = file.read_bytes(&mut buf).await.unwrap();
+    assert_eq!(n, 27);
+    assert_eq!(&buf, b"hello, world. We're writing");
+    // File contents should be "hello, worABCDEFGHIJ"
+    let data = fs.read("/small_file").await.unwrap();
+    assert_eq!(&data, b"hello, world. We're writing");
 }
 
 #[tokio::test]
