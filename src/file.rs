@@ -208,6 +208,66 @@ impl File {
         Ok(buf.len())
     }
 
+    /// Truncate or extend the file to `new_size` without allocating or deallocating blocks.
+    ///
+    /// - Shrinking succeeds only if it does not require freeing any blocks (i.e., stays within
+    ///   the same last allocated block).
+    /// - Growing succeeds only if it does not require allocating new blocks (i.e., the target
+    ///   position lies within already allocated blocks or holes are not introduced).
+    pub async fn truncate(&mut self, new_size: u64) -> Result<(), Ext4Error> {
+        let block_size = self.fs.0.superblock.block_size;
+
+        // Fast path: no change.
+        if new_size == self.inode.metadata.size_in_bytes {
+            return Ok(());
+        }
+
+        async fn block_for_position(
+            fs: &Ext4,
+            inode: &Inode,
+            pos: u64,
+        ) -> Result<Option<FsBlockIndex>, Ext4Error> {
+            if pos == 0 {
+                return Ok(None);
+            }
+            let block_size = fs.0.superblock.block_size;
+            let mut it = FileBlocks::new(fs.clone(), inode)?;
+            let num_blocks = (pos - 1) / block_size.to_nz_u64();
+            for _ in 0..num_blocks {
+                // Advance ignoring value; EOF handled when pos exceeds file mapping.
+                it.next().await;
+            }
+            match it.next().await {
+                Some(res) => Ok(Some(res?)),
+                None => Ok(Some(0)), // Past mapped blocks -> implies deallocation would be required
+            }
+        }
+
+        let curr_size = self.inode.metadata.size_in_bytes;
+        if new_size < curr_size {
+            // ensure we do not cross a block boundary in a way that would free blocks.
+            let curr_block_num = curr_size / block_size.to_nz_u64();
+            let new_block_num = new_size / block_size.to_nz_u64();
+            if curr_block_num != new_block_num {
+                return Err(Ext4Error::Readonly);
+            }
+            // Within same block: just update size metadata.
+            self.inode.metadata.size_in_bytes = new_size;
+            self.inode.write(&self.fs).await
+        } else {
+            // Grow: ensure target lies within already allocated blocks (no allocation).
+            let target_block =
+                block_for_position(&self.fs, &self.inode, new_size).await?;
+            // If target_block is Some(0) -> hole or beyond mapping; allocation would be needed.
+            if matches!(target_block, Some(0)) {
+                return Err(Ext4Error::Readonly);
+            }
+            // Otherwise permitted: update size metadata only.
+            self.inode.metadata.size_in_bytes = new_size;
+            self.inode.write(&self.fs).await
+        }
+    }
+
     /// Write bytes from `buf` into the file, returning how many bytes
     /// were written. The number may be smaller than the length of the
     /// input buffer.
@@ -220,38 +280,25 @@ impl File {
             return Ok(0);
         }
 
-        // Don't write outside the current end of the file.
-        if self.position >= self.inode.metadata.size_in_bytes {
-            return Err(Ext4Error::Readonly);
-        }
-        let bytes_remaining = self
-            .inode
-            .metadata
-            .size_in_bytes
-            .checked_sub(self.position)
-            .unwrap();
-
-        // Determine how many bytes we are allowed to write, capped by file size.
-        let mut write_len = buf.len();
-        if let Ok(bytes_remaining_usize) = usize::try_from(bytes_remaining) {
-            if write_len > bytes_remaining_usize {
-                write_len = bytes_remaining_usize;
-            }
-        }
-
         let block_size = self.fs.0.superblock.block_size;
 
         // Get the block to write to.
         let block_index = if let Some(block_index) = self.block_index {
             block_index
         } else {
-            // We're not at EOF due to the check above, so next block must exist.
-            let block_index = self.file_blocks.next().await.unwrap()?;
-            self.block_index = Some(block_index);
-            block_index
+            // Fetch next block from iterator; if at EOF in mapping this may be None.
+            let next = self.file_blocks.next().await;
+            match next {
+                Some(res) => {
+                    let block_index = res?;
+                    self.block_index = Some(block_index);
+                    block_index
+                }
+                None => 0,
+            }
         };
 
-        // Refuse to write into holes; scope is only to change already allocated blocks.
+        // Refuse to write into holes or beyond mapped blocks; scope is only allocated blocks.
         if block_index == 0 {
             return Err(Ext4Error::Readonly);
         }
@@ -265,6 +312,7 @@ impl File {
             .to_u32()
             .checked_sub(offset_within_block)
             .unwrap();
+        let mut write_len = buf.len();
         if write_len > usize_from_u32(bytes_remaining_in_block) {
             write_len = usize_from_u32(bytes_remaining_in_block);
         }
@@ -282,7 +330,15 @@ impl File {
             // Move to next block on subsequent calls.
             self.block_index = None;
         }
-        self.position = self.position.checked_add(write_len as u64).unwrap();
+        let new_position = self.position.checked_add(write_len as u64).unwrap();
+        self.position = new_position;
+
+        // If we extended past previous EOF, update inode size without allocating.
+        if new_position > self.inode.metadata.size_in_bytes {
+            self.inode.metadata.size_in_bytes = new_position;
+            // Persist the inode metadata update.
+            self.inode.write(&self.fs).await?;
+        }
 
         Ok(write_len)
     }
