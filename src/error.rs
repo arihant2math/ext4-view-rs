@@ -394,12 +394,6 @@ pub(crate) enum CorruptKind {
         /// Length in bytes of the read.
         write_len: usize,
     },
-
-    /// Attempting to read too much data in the block cache.
-    BlockCacheReadTooLarge {
-        num_blocks: u32,
-        block_size: BlockSize,
-    },
 }
 
 impl Display for CorruptKind {
@@ -606,13 +600,6 @@ impl Display for CorruptKind {
                     "invalid write of length {write_len} to block {block_index} (originally {original_block_index}) at offset {offset_within_block}"
                 )
             }
-            Self::BlockCacheReadTooLarge {
-                num_blocks,
-                block_size,
-            } => write!(
-                f,
-                "attempted to read {num_blocks} blocks with block_size {block_size}"
-            ),
         }
     }
 }
