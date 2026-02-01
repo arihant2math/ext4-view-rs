@@ -172,6 +172,7 @@ impl Inode {
         let i_mtime = read_u32le(data, 0x10);
         let i_dtime = read_u32le(data, 0x14);
         let i_gid = read_u16le(data, 0x18);
+        let i_links_count = read_u16le(data, 0x1a).into();
         let i_flags = read_u32le(data, 0x20);
         // OK to unwrap: already checked the length.
         let i_block = data.get(0x28..0x28 + Self::INLINE_DATA_LEN).unwrap();
@@ -196,7 +197,6 @@ impl Inode {
         let gid = u32_from_hilo(l_i_gid_high, i_gid);
         let checksum = u32_from_hilo(i_checksum_hi, l_i_checksum_lo);
         let mode = InodeMode::from_bits_retain(i_mode);
-        let links_count = read_u16le(data, 0x1a).into();
 
         let mut checksum_base =
             Checksum::with_seed(ext4.0.superblock.checksum_seed);
@@ -227,7 +227,7 @@ impl Inode {
                         CorruptKind::InodeFileType { inode: index, mode }
                     })?,
                     mtime: timestamp_to_duration(i_mtime, None),
-                    links_count,
+                    links_count: i_links_count,
                 },
                 inode_data: data.to_vec(),
                 flags: InodeFlags::from_bits_retain(i_flags),
