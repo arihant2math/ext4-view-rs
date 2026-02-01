@@ -9,7 +9,7 @@
 use ext4_view::{Ext4, Ext4Error, FollowSymlinks, Path};
 use tokio;
 
-use super::test_util::{load_compressed_filesystem, load_test_disk1};
+use super::test_util::load_compressed_filesystem;
 
 use async_trait::async_trait;
 use ext4_view::Ext4Read;
