@@ -107,8 +107,10 @@ fn timestamp_to_duration(timestamp: u32, _high: Option<u32>) -> Duration {
 #[derive(Clone, Debug)]
 pub struct Inode {
     /// This inode's index.
+    /// This is constant, so it is safe to cache it and expose it as a public field.
     pub index: InodeIndex,
 
+    /// Kept for backwards compatability, because initialization can cause erroring out.
     file_type: FileType,
 
     /// Full inode data as read from disk.
@@ -118,6 +120,7 @@ pub struct Inode {
     checksum_base: Checksum,
 
     /// Number of blocks in the file (including holes).
+    // TODO: Don't cache this
     file_size_in_blocks: u32,
 }
 
