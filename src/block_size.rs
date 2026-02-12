@@ -32,6 +32,7 @@ impl BlockSize {
         self.0.get()
     }
 
+    #[expect(dead_code)]
     pub(crate) const fn to_nz_u32(self) -> NonZero<u32> {
         self.0
     }
