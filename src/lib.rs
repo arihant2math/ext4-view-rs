@@ -96,7 +96,7 @@
 
 #![cfg_attr(not(any(feature = "std", test)), no_std)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-// #![forbid(unsafe_code)]
+#![forbid(unsafe_code)]
 #![warn(
     clippy::arithmetic_side_effects,
     clippy::as_conversions,
@@ -199,10 +199,6 @@ struct Ext4Inner {
 /// [ext4]: https://en.wikipedia.org/wiki/Ext4
 #[derive(Clone)]
 pub struct Ext4(Arc<Ext4Inner>);
-
-// TODO: fix
-unsafe impl Send for Ext4Inner {}
-unsafe impl Sync for Ext4Inner {}
 
 impl Ext4 {
     /// Load an `Ext4` instance from the given `reader`.
