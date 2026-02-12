@@ -23,7 +23,7 @@ pub async fn get_dir_entry_inode_by_name(
     dir_inode: &Inode,
     name: DirEntryName<'_>,
 ) -> Result<Inode, Ext4Error> {
-    assert!(dir_inode.metadata().is_dir());
+    assert!(dir_inode.file_type().is_dir());
 
     if dir_inode.flags().contains(InodeFlags::DIRECTORY_ENCRYPTED) {
         return Err(Ext4Error::Encrypted);

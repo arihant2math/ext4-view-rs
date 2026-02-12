@@ -132,7 +132,7 @@ pub(crate) async fn resolve_path(
         // Get the component name.
         let comp = &path[index..comp_end];
 
-        if !inode.metadata().is_dir() {
+        if !inode.file_type().is_dir() {
             // Can't look up a child of a non-directory;
             // path is invalid. This handles a case like
             // "/a/b", where "a" is a regular file instead
@@ -159,7 +159,7 @@ pub(crate) async fn resolve_path(
             path.drain(remove_start..comp_end_with_sep);
             index = remove_start;
             inode = child_inode;
-        } else if child_inode.metadata().is_symlink()
+        } else if child_inode.file_type().is_symlink()
             && (follow == FollowSymlinks::All || !is_last_component)
         {
             // Resolve symlink, unless this is the last component and `follow != All`.
@@ -219,7 +219,7 @@ pub(crate) async fn resolve_path(
     //
     // OK to unwrap: if path is non-empty then `last` is not None.
     if path.len() > 1 && *path.last().unwrap() == Path::SEPARATOR {
-        if inode.metadata().is_dir() {
+        if inode.file_type().is_dir() {
             path.pop();
         } else {
             return Err(Ext4Error::NotADirectory);

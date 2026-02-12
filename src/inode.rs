@@ -302,13 +302,12 @@ impl Inode {
         &self,
         ext4: &Ext4,
     ) -> Result<PathBuf, Ext4Error> {
-        let metadata = self.metadata();
-        if !metadata.is_symlink() {
+        if !self.file_type.is_symlink() {
             return Err(Ext4Error::NotASymlink);
         }
 
         // An empty symlink target is not allowed.
-        if metadata.size_in_bytes == 0 {
+        if self.size_in_bytes() == 0 {
             return Err(CorruptKind::SymlinkTarget(self.index).into());
         }
 
@@ -316,9 +315,9 @@ impl Inode {
         // targets are stored as regular file data.
         const MAX_INLINE_SYMLINK_LEN: u64 = 59;
 
-        if metadata.size_in_bytes <= MAX_INLINE_SYMLINK_LEN {
+        if self.size_in_bytes() <= MAX_INLINE_SYMLINK_LEN {
             // OK to unwrap since we checked the size above.
-            let len = usize::try_from(metadata.size_in_bytes).unwrap();
+            let len = usize::try_from(self.size_in_bytes()).unwrap();
             let target = &self.inline_data()[..len];
 
             PathBuf::try_from(target)
@@ -354,6 +353,134 @@ impl Inode {
         i_block.try_into().unwrap()
     }
 
+    /// Get the inode's mode bits.
+    pub fn mode(&self) -> InodeMode {
+        let i_mode = read_u16le(&self.inode_data, 0x0);
+        InodeMode::from_bits_retain(i_mode)
+    }
+
+    /// Set the inode's mode bits.
+    pub fn set_mode(&mut self, mode: InodeMode) -> Result<(), Ext4Error> {
+        write_u16le(&mut self.inode_data, 0x0, mode.bits());
+        self.file_type = FileType::try_from(mode).map_err(|_| {
+            CorruptKind::InodeFileType {
+                inode: self.index,
+                mode,
+            }
+        })?;
+        Ok(())
+    }
+
+    /// Get the file type based on the mode bits.
+    pub fn file_type(&self) -> FileType {
+        self.file_type
+    }
+
+    /// Set the file type based on the mode bits.
+    pub fn set_file_type(&mut self, file_type: FileType) {
+        self.file_type = file_type;
+    }
+
+    /// Get the inode's user ID.
+    pub fn uid(&self) -> u32 {
+        let i_uid = read_u16le(&self.inode_data, 0x2);
+        let l_i_uid_high = read_u16le(&self.inode_data, 0x74 + 0x4);
+        u32_from_hilo(l_i_uid_high, i_uid)
+    }
+
+    /// Set the inode's user ID.
+    pub fn set_uid(&mut self, uid: u32) {
+        let (l_i_uid_high, i_uid) = u32_to_hilo(uid);
+        write_u16le(&mut self.inode_data, 0x2, i_uid);
+        write_u16le(&mut self.inode_data, 0x74 + 0x4, l_i_uid_high);
+    }
+
+    /// Get the inode's group ID.
+    pub fn gid(&self) -> u32 {
+        let i_gid = read_u16le(&self.inode_data, 0x18);
+        let l_i_gid_high = read_u16le(&self.inode_data, 0x74 + 0x6);
+        u32_from_hilo(l_i_gid_high, i_gid)
+    }
+
+    /// Set the inode's group ID.
+    pub fn set_gid(&mut self, gid: u32) {
+        let (l_i_gid_high, i_gid) = u32_to_hilo(gid);
+        write_u16le(&mut self.inode_data, 0x18, i_gid);
+        write_u16le(&mut self.inode_data, 0x74 + 0x6, l_i_gid_high);
+    }
+
+    /// Get the inode's size in bytes.
+    pub fn size_in_bytes(&self) -> u64 {
+        let i_size_lo = read_u32le(&self.inode_data, 0x4);
+        let i_size_high = read_u32le(&self.inode_data, 0x6c);
+        u64_from_hilo(i_size_high, i_size_lo)
+    }
+
+    /// Set the inode's size in bytes.
+    pub fn set_size_in_bytes(&mut self, size_in_bytes: u64) {
+        let (i_size_high, i_size_lo) = u64_to_hilo(size_in_bytes);
+        write_u32le(&mut self.inode_data, 0x4, i_size_lo);
+        write_u32le(&mut self.inode_data, 0x6c, i_size_high);
+    }
+
+    /// Get the inode's access time.
+    pub fn atime(&self) -> Duration {
+        let i_atime = read_u32le(&self.inode_data, 0x8);
+        timestamp_to_duration(i_atime, None)
+    }
+
+    /// Set the inode's access time.
+    pub fn set_atime(&mut self, atime: Duration) {
+        let i_atime = atime.as_secs().try_into().unwrap_or(u32::MAX);
+        write_u32le(&mut self.inode_data, 0x8, i_atime);
+    }
+
+    /// Get the inode's creation time.
+    pub fn ctime(&self) -> Duration {
+        let i_ctime = read_u32le(&self.inode_data, 0xc);
+        timestamp_to_duration(i_ctime, None)
+    }
+
+    /// Set the inode's creation time.
+    pub fn set_ctime(&mut self, ctime: Duration) {
+        let i_ctime = ctime.as_secs().try_into().unwrap_or(u32::MAX);
+        write_u32le(&mut self.inode_data, 0xc, i_ctime);
+    }
+
+    /// Get the inode's modification time.
+    pub fn mtime(&self) -> Duration {
+        let i_mtime = read_u32le(&self.inode_data, 0x10);
+        timestamp_to_duration(i_mtime, None)
+    }
+
+    /// Set the inode's modification time.
+    pub fn set_mtime(&mut self, mtime: Duration) {
+        let i_mtime = mtime.as_secs().try_into().unwrap_or(u32::MAX);
+        write_u32le(&mut self.inode_data, 0x10, i_mtime);
+    }
+
+    /// Get the inode's delete time.
+    pub fn dtime(&self) -> Duration {
+        let i_dtime = read_u32le(&self.inode_data, 0x14);
+        timestamp_to_duration(i_dtime, None)
+    }
+
+    /// Set the inode's delete time.
+    pub fn set_dtime(&mut self, dtime: Duration) {
+        let i_dtime = dtime.as_secs().try_into().unwrap_or(u32::MAX);
+        write_u32le(&mut self.inode_data, 0x14, i_dtime);
+    }
+
+    /// Get the inode's links count.
+    pub fn links_count(&self) -> u16 {
+        read_u16le(&self.inode_data, 0x1a)
+    }
+
+    /// Set the inode's links count.
+    pub fn set_links_count(&mut self, links_count: u16) {
+        write_u16le(&mut self.inode_data, 0x1a, links_count);
+    }
+
     /// Get the inode's metadata.
     pub fn metadata(&self) -> Metadata {
         let i_mode = read_u16le(&self.inode_data, 0x0);
@@ -385,35 +512,6 @@ impl Inode {
             mtime: timestamp_to_duration(i_mtime, None),
             links_count: i_links_count,
         }
-    }
-
-    /// Set the inode's metadata. This does not write the changes to disk;
-    /// call [`Self::write()`] to do that.
-    pub fn set_metadata(&mut self, metadata: Metadata) {
-        self.file_type = metadata.file_type;
-        let (l_i_gid_high, i_gid) = u32_to_hilo(metadata.gid);
-        let (l_i_uid_high, i_uid) = u32_to_hilo(metadata.uid);
-        let (i_size_high, i_size_lo) = u64_to_hilo(metadata.size_in_bytes);
-        // TODO: Handle larger timestamps as well as nanosecond precision.
-        let i_atime = metadata.atime.as_secs().try_into().unwrap_or(u32::MAX);
-        let i_ctime = metadata.ctime.as_secs().try_into().unwrap_or(u32::MAX);
-        let i_mtime = metadata.mtime.as_secs().try_into().unwrap_or(u32::MAX);
-        let i_dtime = metadata.dtime.as_secs().try_into().unwrap_or(u32::MAX);
-        let i_mode = metadata.mode.bits();
-        let i_links_count = metadata.links_count;
-
-        write_u16le(&mut self.inode_data, 0x0, i_mode);
-        write_u16le(&mut self.inode_data, 0x2, i_uid);
-        write_u32le(&mut self.inode_data, 0x4, i_size_lo);
-        write_u32le(&mut self.inode_data, 0x8, i_atime);
-        write_u32le(&mut self.inode_data, 0xc, i_ctime);
-        write_u32le(&mut self.inode_data, 0x10, i_mtime);
-        write_u32le(&mut self.inode_data, 0x14, i_dtime);
-        write_u16le(&mut self.inode_data, 0x18, i_gid);
-        write_u16le(&mut self.inode_data, 0x1a, i_links_count);
-        write_u32le(&mut self.inode_data, 0x6c, i_size_high);
-        write_u16le(&mut self.inode_data, 0x74 + 0x4, l_i_uid_high);
-        write_u16le(&mut self.inode_data, 0x74 + 0x6, l_i_gid_high);
     }
 
     pub(crate) fn checksum_base(&self) -> &Checksum {

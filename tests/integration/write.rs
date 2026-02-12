@@ -211,10 +211,8 @@ async fn test_inode_modification_time() {
         .unwrap();
     let new_atime = core::time::Duration::new(6000, 0);
     let now = core::time::Duration::new(5000, 0);
-    let mut metadata = inode.metadata();
-    metadata.atime = new_atime;
-    metadata.mtime = now;
-    inode.set_metadata(metadata);
+    inode.set_atime(new_atime);
+    inode.set_mtime(now);
     inode.write(&fs).await.unwrap();
     // Reload inode to verify change persisted.
     let reloaded = fs
