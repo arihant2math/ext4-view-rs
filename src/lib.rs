@@ -154,6 +154,7 @@ use journal::Journal;
 use superblock::Superblock;
 use util::usize_from_u32;
 
+use crate::bitmap::BitmapHandle;
 pub use dir::get_dir_entry_inode_by_name;
 pub use dir_entry::{DirEntry, DirEntryName, DirEntryNameError};
 pub use error::{Corrupt, Ext4Error, Incompatible};
@@ -411,6 +412,25 @@ impl Ext4 {
             return Err(Ext4Error::Readonly);
         }
         Ok(())
+    }
+
+    #[expect(unused)]
+    async fn mark_block(
+        &self,
+        original_block_index: FsBlockIndex,
+        used: bool,
+    ) -> Result<(), Ext4Error> {
+        let block_index = self.0.journal.map_block_index(original_block_index);
+        let block_group_index =
+            block_index / self.0.superblock.blocks_per_group() as u64;
+        let block_group = &self.0.block_group_descriptors
+            [usize_from_u32(block_group_index as u32)];
+        let bitmap_handle = BitmapHandle::new(block_group.block_bitmap_block());
+        let block_offset =
+            block_index % self.0.superblock.blocks_per_group() as u64;
+        bitmap_handle
+            .set(block_offset as u32, used, self)
+            .await
     }
 
     /// Read the entire contents of a file into a `Vec<u8>`.

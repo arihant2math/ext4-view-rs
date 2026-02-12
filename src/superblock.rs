@@ -269,6 +269,10 @@ impl Superblock {
         self.uuid
     }
 
+    pub(crate) fn blocks_per_group(&self) -> u32 {
+        read_u32le(&self.data, 0x20)
+    }
+
     #[expect(unused)]
     pub(crate) fn free_inodes_count(&self) -> u32 {
         read_u32le(&self.data, 0x10)
