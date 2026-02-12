@@ -18,8 +18,6 @@ use crate::util::usize_from_u32;
 use core::fmt::{self, Debug, Formatter};
 
 use crate::iters::AsyncIterator;
-#[cfg(feature = "std")]
-use std::io::{self, ErrorKind, Read, Seek, SeekFrom};
 
 /// An open file within an [`Ext4`] filesystem.
 pub struct File {

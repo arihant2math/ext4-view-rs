@@ -209,7 +209,7 @@ mod tests {
             load_compressed_filesystem("test_disk_4k_block_journal.bin.zst")
                 .await;
         let journal_inode =
-            Inode::read(&fs, fs.0.superblock.journal_inode.unwrap())
+            Inode::read(&fs, fs.0.superblock.journal_inode().unwrap())
                 .await
                 .unwrap();
         let superblock =
