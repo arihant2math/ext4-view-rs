@@ -422,6 +422,7 @@ impl Inode {
     ///
     /// Ext4 allows at most `2^32` blocks in a file. Returns
     /// `CorruptKind::TooManyBlocksInFile` if that limit is exceeded.
+    #[must_use]
     pub fn file_size_in_blocks(&self) -> u32 {
         self.file_size_in_blocks
     }
