@@ -35,7 +35,7 @@ impl BlockGroupDescriptor {
 
         // Get the high bits of the inode table block.
         let bg_inode_table_hi = if superblock
-            .incompatible_features
+            .incompatible_features()
             .contains(IncompatibleFeatures::IS_64BIT)
         {
             read_u32le(bytes, BG_INODE_TABLE_HI_OFFSET)
@@ -91,12 +91,12 @@ impl BlockGroupDescriptor {
         let block_group_descriptor = Self::from_bytes(sb, &data);
 
         let has_metadata_checksums = sb
-            .read_only_compatible_features
+            .read_only_compatible_features()
             .contains(ReadOnlyCompatibleFeatures::METADATA_CHECKSUMS);
 
         // Verify the descriptor checksum.
         if has_metadata_checksums {
-            let mut checksum = Checksum::with_seed(sb.checksum_seed);
+            let mut checksum = Checksum::with_seed(sb.checksum_seed());
             checksum.update_u32_le(bgd_index);
             // Up to the checksum field.
             checksum.update(&data[..Self::BG_CHECKSUM_OFFSET]);
@@ -114,7 +114,7 @@ impl BlockGroupDescriptor {
                 .into());
             }
         } else if sb
-            .read_only_compatible_features
+            .read_only_compatible_features()
             .contains(ReadOnlyCompatibleFeatures::GROUP_DESCRIPTOR_CHECKSUMS)
         {
             // TODO: prior to general checksum metadata being added,
@@ -131,9 +131,9 @@ impl BlockGroupDescriptor {
         reader: &mut dyn Ext4Read,
     ) -> Result<Vec<Self>, Ext4Error> {
         let mut block_group_descriptors =
-            Vec::with_capacity(usize_from_u32(sb.num_block_groups));
+            Vec::with_capacity(usize_from_u32(sb.num_block_groups()));
 
-        for bgd_index in 0..sb.num_block_groups {
+        for bgd_index in 0..sb.num_block_groups() {
             let bgd = Self::read(sb, reader, bgd_index).await?;
             block_group_descriptors.push(bgd);
         }

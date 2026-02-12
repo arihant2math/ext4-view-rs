@@ -231,7 +231,10 @@ impl File {
             }
             let block_size = fs.0.superblock.block_size();
             let mut it = FileBlocks::new(fs.clone(), inode)?;
-            #[expect(clippy::arithmetic_side_effects, reason = "We check for pos == 0 above")]
+            #[expect(
+                clippy::arithmetic_side_effects,
+                reason = "We check for pos == 0 above"
+            )]
             let num_blocks = (pos - 1) / block_size.to_nz_u64();
             for _ in 0..num_blocks {
                 // Advance ignoring value; EOF handled when pos exceeds file mapping.
@@ -359,7 +362,8 @@ impl File {
 
         // Advance the block iterator by the number of whole blocks in
         // `position`.
-        let num_blocks = position / self.fs.0.superblock.block_size().to_nz_u64();
+        let num_blocks =
+            position / self.fs.0.superblock.block_size().to_nz_u64();
         for _ in 0..num_blocks {
             self.file_blocks.next().await;
         }
