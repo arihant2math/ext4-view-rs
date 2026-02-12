@@ -76,7 +76,6 @@ impl File {
     }
 
     /// Set the file metadata.
-    #[must_use]
     pub async fn set_metadata(
         &mut self,
         metadata: Metadata,
@@ -232,6 +231,7 @@ impl File {
             }
             let block_size = fs.0.superblock.block_size();
             let mut it = FileBlocks::new(fs.clone(), inode)?;
+            #[expect(clippy::arithmetic_side_effects, reason = "We check for pos == 0 above")]
             let num_blocks = (pos - 1) / block_size.to_nz_u64();
             for _ in 0..num_blocks {
                 // Advance ignoring value; EOF handled when pos exceeds file mapping.
@@ -370,6 +370,7 @@ impl File {
     }
 
     /// Consume the `File`, returning the underlying `Inode`.
+    #[must_use]
     pub fn into_inode(self) -> Inode {
         self.inode
     }

@@ -148,15 +148,6 @@ fn read_from_bytes(src: &[u8], start_byte: u64, dst: &mut [u8]) -> Option<()> {
     Some(())
 }
 
-fn write_to_bytes(dst: &mut [u8], start_byte: u64, src: &[u8]) -> Option<()> {
-    let start = usize::try_from(start_byte).ok()?;
-    let end = start.checked_add(src.len())?;
-    let dst = dst.get_mut(start..end)?;
-    dst.copy_from_slice(src);
-
-    Some(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -344,7 +344,7 @@ impl Ext4 {
         self.0
             .reader
             .read(
-                block_index as u64 * self.0.superblock.block_size().to_u64()
+                block_index * self.0.superblock.block_size().to_u64()
                     + offset_within_block as u64,
                 dst,
             )
@@ -400,7 +400,7 @@ impl Ext4 {
         if let Some(writer) = &self.0.writer {
             writer
                 .write(
-                    block_index as u64 * self.0.superblock.block_size().to_u64()
+                    block_index * self.0.superblock.block_size().to_u64()
                         + offset_within_block as u64,
                     src,
                 )
