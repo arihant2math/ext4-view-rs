@@ -14,7 +14,8 @@ use crate::file_type::FileType;
 use crate::metadata::Metadata;
 use crate::path::PathBuf;
 use crate::util::{
-    read_u16le, read_u32le, u32_from_hilo, u64_from_hilo, usize_from_u32,
+    read_u16le, read_u32le, u32_from_hilo, u32_to_hilo, u64_from_hilo,
+    u64_to_hilo, usize_from_u32, write_u16le, write_u32le,
 };
 use alloc::vec;
 use alloc::vec::Vec;
@@ -108,8 +109,7 @@ pub struct Inode {
     /// This inode's index.
     pub index: InodeIndex,
 
-    /// Metadata about the file.
-    metadata: Metadata,
+    file_type: FileType,
 
     /// Full inode data as read from disk.
     inode_data: Vec<u8>,
@@ -157,18 +157,9 @@ impl Inode {
         }
 
         let i_mode = read_u16le(data, 0x0);
-        let i_uid = read_u16le(data, 0x2);
         let i_size_lo = read_u32le(data, 0x4);
-        let i_atime = read_u32le(data, 0x8);
-        let i_ctime = read_u32le(data, 0xc);
-        let i_mtime = read_u32le(data, 0x10);
-        let i_dtime = read_u32le(data, 0x14);
-        let i_gid = read_u16le(data, 0x18);
-        let i_links_count = read_u16le(data, 0x1a).into();
         let i_generation = read_u32le(data, 0x64);
         let i_size_high = read_u32le(data, 0x6c);
-        let l_i_uid_high = read_u16le(data, 0x74 + 0x4);
-        let l_i_gid_high = read_u16le(data, 0x74 + 0x6);
         let (l_i_checksum_lo, i_checksum_hi) = if ext4.has_metadata_checksums()
         {
             (
@@ -182,8 +173,6 @@ impl Inode {
         };
 
         let size_in_bytes = u64_from_hilo(i_size_high, i_size_lo);
-        let uid = u32_from_hilo(l_i_uid_high, i_uid);
-        let gid = u32_from_hilo(l_i_gid_high, i_gid);
         let checksum = u32_from_hilo(i_checksum_hi, l_i_checksum_lo);
         let mode = InodeMode::from_bits_retain(i_mode);
 
@@ -202,20 +191,9 @@ impl Inode {
         Ok((
             Self {
                 index,
-                metadata: Metadata {
-                    size_in_bytes,
-                    mode,
-                    uid,
-                    gid,
-                    atime: timestamp_to_duration(i_atime, None),
-                    ctime: timestamp_to_duration(i_ctime, None),
-                    dtime: timestamp_to_duration(i_dtime, None),
-                    file_type: FileType::try_from(mode).map_err(|_| {
-                        CorruptKind::InodeFileType { inode: index, mode }
-                    })?,
-                    mtime: timestamp_to_duration(i_mtime, None),
-                    links_count: i_links_count,
-                },
+                file_type: FileType::try_from(mode).map_err(|_| {
+                    CorruptKind::InodeFileType { inode: index, mode }
+                })?,
                 inode_data: data.to_vec(),
                 checksum_base,
                 file_size_in_blocks,
@@ -273,54 +251,6 @@ impl Inode {
     }
 
     pub(crate) fn update_inode_data(&mut self, ext4: &Ext4) {
-        // i_mode
-        self.inode_data[0x0..0x2]
-            .copy_from_slice(&self.metadata.mode.bits().to_le_bytes());
-        // i_uid
-        self.inode_data[0x2..0x4]
-            .copy_from_slice(&(self.metadata.uid as u16).to_le_bytes());
-        // i_size_lo
-        self.inode_data[0x4..0x8].copy_from_slice(
-            &u32::try_from(self.metadata.size_in_bytes)
-                .unwrap_or(0)
-                .to_le_bytes(),
-        );
-        // i_atime
-        if self.metadata.atime.as_secs() > u32::MAX as u64 {
-            panic!("atime overflow");
-        }
-        self.inode_data[0x8..0xc].copy_from_slice(
-            &(self.metadata.atime.as_secs() as u32).to_le_bytes(),
-        );
-        // i_ctime
-        if self.metadata.ctime.as_secs() > u32::MAX as u64 {
-            panic!("ctime overflow");
-        }
-        self.inode_data[0xc..0x10].copy_from_slice(
-            &(self.metadata.ctime.as_secs() as u32).to_le_bytes(),
-        );
-        // i_mtime
-        if self.metadata.mtime.as_secs() > u32::MAX as u64 {
-            panic!("mtime overflow");
-        }
-        self.inode_data[0x10..0x14].copy_from_slice(
-            &(self.metadata.mtime.as_secs() as u32).to_le_bytes(),
-        );
-        // i_dtime
-        if self.metadata.dtime.as_secs() > u32::MAX as u64 {
-            panic!("dtime overflow");
-        }
-        self.inode_data[0x14..0x18].copy_from_slice(
-            &(self.metadata.dtime.as_secs() as u32).to_le_bytes(),
-        );
-        // i_gid
-        self.inode_data[0x18..0x1a]
-            .copy_from_slice(&(self.metadata.gid as u16).to_le_bytes());
-        // i_size_hi
-        self.inode_data[0x6c..0x70].copy_from_slice(
-            &((self.metadata.size_in_bytes >> 32) as u32).to_le_bytes(),
-        );
-        // TODO: update other fields as need
         if ext4.has_metadata_checksums() {
             let mut checksum = self.checksum_base.clone();
             // Up to the l_i_checksum_lo field.
@@ -369,12 +299,13 @@ impl Inode {
         &self,
         ext4: &Ext4,
     ) -> Result<PathBuf, Ext4Error> {
-        if !self.metadata.is_symlink() {
+        let metadata = self.metadata();
+        if !metadata.is_symlink() {
             return Err(Ext4Error::NotASymlink);
         }
 
         // An empty symlink target is not allowed.
-        if self.metadata.size_in_bytes == 0 {
+        if metadata.size_in_bytes == 0 {
             return Err(CorruptKind::SymlinkTarget(self.index).into());
         }
 
@@ -382,9 +313,9 @@ impl Inode {
         // targets are stored as regular file data.
         const MAX_INLINE_SYMLINK_LEN: u64 = 59;
 
-        if self.metadata.size_in_bytes <= MAX_INLINE_SYMLINK_LEN {
+        if metadata.size_in_bytes <= MAX_INLINE_SYMLINK_LEN {
             // OK to unwrap since we checked the size above.
-            let len = usize::try_from(self.metadata.size_in_bytes).unwrap();
+            let len = usize::try_from(metadata.size_in_bytes).unwrap();
             let target = &self.inline_data()[..len];
 
             PathBuf::try_from(target)
@@ -412,20 +343,74 @@ impl Inode {
 
     pub(crate) fn inline_data(&self) -> [u8; Self::INLINE_DATA_LEN] {
         // OK to unwrap: already checked the length.
-        let i_block = self.inode_data.get(0x28..0x28 + Self::INLINE_DATA_LEN).unwrap();
+        let i_block = self
+            .inode_data
+            .get(0x28..0x28 + Self::INLINE_DATA_LEN)
+            .unwrap();
         // OK to unwrap, we know `i_block` is 60 bytes.
         i_block.try_into().unwrap()
     }
 
     /// Get the inode's metadata.
     pub fn metadata(&self) -> Metadata {
-        self.metadata
+        let i_mode = read_u16le(&self.inode_data, 0x0);
+        let i_uid = read_u16le(&self.inode_data, 0x2);
+        let i_size_lo = read_u32le(&self.inode_data, 0x4);
+        let i_atime = read_u32le(&self.inode_data, 0x8);
+        let i_ctime = read_u32le(&self.inode_data, 0xc);
+        let i_mtime = read_u32le(&self.inode_data, 0x10);
+        let i_dtime = read_u32le(&self.inode_data, 0x14);
+        let i_gid = read_u16le(&self.inode_data, 0x18);
+        let i_links_count = read_u16le(&self.inode_data, 0x1a);
+        let i_size_high = read_u32le(&self.inode_data, 0x6c);
+        let l_i_uid_high = read_u16le(&self.inode_data, 0x74 + 0x4);
+        let l_i_gid_high = read_u16le(&self.inode_data, 0x74 + 0x6);
+        let size_in_bytes = u64_from_hilo(i_size_high, i_size_lo);
+        let uid = u32_from_hilo(l_i_uid_high, i_uid);
+        let gid = u32_from_hilo(l_i_gid_high, i_gid);
+        let mode = InodeMode::from_bits_retain(i_mode);
+
+        Metadata {
+            size_in_bytes,
+            mode,
+            uid,
+            gid,
+            atime: timestamp_to_duration(i_atime, None),
+            ctime: timestamp_to_duration(i_ctime, None),
+            dtime: timestamp_to_duration(i_dtime, None),
+            file_type: self.file_type,
+            mtime: timestamp_to_duration(i_mtime, None),
+            links_count: i_links_count,
+        }
     }
 
     /// Set the inode's metadata. This does not write the changes to disk;
     /// call [`Self::write()`] to do that.
     pub fn set_metadata(&mut self, metadata: Metadata) {
-        self.metadata = metadata;
+        self.file_type = metadata.file_type;
+        let (l_i_gid_high, i_gid) = u32_to_hilo(metadata.gid);
+        let (l_i_uid_high, i_uid) = u32_to_hilo(metadata.uid);
+        let (i_size_high, i_size_lo) = u64_to_hilo(metadata.size_in_bytes);
+        // TODO: Handle larger timestamps as well as nanosecond precision.
+        let i_atime = metadata.atime.as_secs().try_into().unwrap_or(u32::MAX);
+        let i_ctime = metadata.ctime.as_secs().try_into().unwrap_or(u32::MAX);
+        let i_mtime = metadata.mtime.as_secs().try_into().unwrap_or(u32::MAX);
+        let i_dtime = metadata.dtime.as_secs().try_into().unwrap_or(u32::MAX);
+        let i_mode = metadata.mode.bits();
+        let i_links_count = metadata.links_count;
+
+        write_u16le(&mut self.inode_data, 0x0, i_mode);
+        write_u16le(&mut self.inode_data, 0x2, i_uid);
+        write_u32le(&mut self.inode_data, 0x4, i_size_lo);
+        write_u32le(&mut self.inode_data, 0x8, i_atime);
+        write_u32le(&mut self.inode_data, 0xc, i_ctime);
+        write_u32le(&mut self.inode_data, 0x10, i_mtime);
+        write_u32le(&mut self.inode_data, 0x14, i_dtime);
+        write_u16le(&mut self.inode_data, 0x18, i_gid);
+        write_u16le(&mut self.inode_data, 0x1a, i_links_count);
+        write_u32le(&mut self.inode_data, 0x6c, i_size_high);
+        write_u16le(&mut self.inode_data, 0x74 + 0x4, l_i_uid_high);
+        write_u16le(&mut self.inode_data, 0x74 + 0x6, l_i_gid_high);
     }
 
     pub(crate) fn checksum_base(&self) -> &Checksum {

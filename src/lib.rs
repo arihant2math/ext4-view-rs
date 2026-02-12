@@ -423,8 +423,9 @@ impl Ext4 {
         inode: &Inode,
     ) -> Result<Vec<u8>, Ext4Error> {
         // Get the file size and initialize the output vector.
-        let file_size_in_bytes = usize::try_from(inode.metadata().size_in_bytes)
-            .map_err(|_| Ext4Error::FileTooLarge)?;
+        let file_size_in_bytes =
+            usize::try_from(inode.metadata().size_in_bytes)
+                .map_err(|_| Ext4Error::FileTooLarge)?;
         let mut dst = vec![0; file_size_in_bytes];
 
         // Use `File` to read the data in chunks.

@@ -42,7 +42,7 @@ pub struct Metadata {
     pub mtime: Duration,
 
     /// Number of hard links to the file.
-    pub links_count: u32,
+    pub links_count: u16,
 }
 
 impl Metadata {
