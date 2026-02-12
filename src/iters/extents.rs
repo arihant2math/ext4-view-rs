@@ -163,7 +163,7 @@ impl Extents {
             ext4,
             inode: inode.index,
             to_visit: vec![ToVisitItem::new(
-                inode.inline_data.to_vec(),
+                inode.inline_data().to_vec(),
                 inode.index,
             )?],
             checksum_base: inode.checksum_base().clone(),
