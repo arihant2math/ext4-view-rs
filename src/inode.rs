@@ -205,7 +205,7 @@ impl Inode {
 
         let file_size_in_blocks: u32 = size_in_bytes
             // Round up.
-            .div_ceil(ext4.0.superblock.block_size.to_u64())
+            .div_ceil(ext4.0.superblock.block_size().to_u64())
             // Ext4 allows at most `2^32` blocks in a file.
             .try_into()
             .map_err(|_| CorruptKind::TooManyBlocksInFile)?;
@@ -246,7 +246,7 @@ impl Inode {
         let (block_index, offset_within_block) =
             get_inode_location(ext4, inode)?;
 
-        let mut data = vec![0; usize::from(ext4.0.superblock.inode_size)];
+        let mut data = vec![0; usize::from(ext4.0.superblock.inode_size())];
         ext4.read_from_block(block_index, offset_within_block, &mut data)
             .await?;
 
@@ -369,7 +369,7 @@ impl Inode {
     pub async fn write(&mut self, ext4: &Ext4) -> Result<(), Ext4Error> {
         let (block_index, offset_within_block) =
             get_inode_location(ext4, self.index)?;
-        let block_size = ext4.0.superblock.block_size.to_u64();
+        let block_size = ext4.0.superblock.block_size().to_u64();
         let pos = block_index * block_size + u64::from(offset_within_block);
         self.update_inode_data(ext4);
         // Write only the data we've saved to avoid overwriting any unread info
@@ -439,7 +439,7 @@ fn get_inode_location(
     // OK to unwrap: `inode` is nonzero.
     let inode_minus_1 = inode.get().checked_sub(1).unwrap();
 
-    let block_group_index = inode_minus_1 / sb.inodes_per_block_group;
+    let block_group_index = inode_minus_1 / sb.inodes_per_block_group();
 
     let group = ext4
         .0
@@ -451,23 +451,23 @@ fn get_inode_location(
             num_block_groups: ext4.0.block_group_descriptors.len(),
         })?;
 
-    let index_within_group = inode_minus_1 % sb.inodes_per_block_group;
+    let index_within_group = inode_minus_1 % sb.inodes_per_block_group();
 
     let err = || CorruptKind::InodeLocation {
         inode,
         block_group: block_group_index,
-        inodes_per_block_group: sb.inodes_per_block_group,
-        inode_size: sb.inode_size,
-        block_size: sb.block_size,
+        inodes_per_block_group: sb.inodes_per_block_group(),
+        inode_size: sb.inode_size(),
+        block_size: sb.block_size(),
         inode_table_first_block: group.inode_table_first_block,
     };
 
     let byte_offset_within_group = u64::from(index_within_group)
-        .checked_mul(u64::from(sb.inode_size))
+        .checked_mul(u64::from(sb.inode_size()))
         .ok_or_else(err)?;
 
     let byte_offset_of_group = sb
-        .block_size
+        .block_size()
         .to_u64()
         .checked_mul(group.inode_table_first_block)
         .ok_or_else(err)?;
@@ -477,9 +477,9 @@ fn get_inode_location(
         .checked_add(byte_offset_within_group)
         .ok_or_else(err)?;
 
-    let block_index = start_byte / sb.block_size.to_nz_u64();
+    let block_index = start_byte / sb.block_size().to_nz_u64();
     let offset_within_block =
-        u32::try_from(start_byte % sb.block_size.to_nz_u64())
+        u32::try_from(start_byte % sb.block_size().to_nz_u64())
             .map_err(|_| err())?;
 
     Ok((block_index, offset_within_block))

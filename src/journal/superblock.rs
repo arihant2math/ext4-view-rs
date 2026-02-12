@@ -87,7 +87,7 @@ impl JournalSuperblock {
 
         // Ensure the journal block size matches the rest of the
         // filesystem.
-        if superblock.block_size != fs.0.superblock.block_size {
+        if superblock.block_size != fs.0.superblock.block_size() {
             return Err(CorruptKind::JournalBlockSize.into());
         }
 

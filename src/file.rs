@@ -131,7 +131,7 @@ impl File {
             }
         }
 
-        let block_size = self.fs.0.superblock.block_size;
+        let block_size = self.fs.0.superblock.block_size();
 
         // Get the block to read from.
         let block_index = if let Some(block_index) = self.block_index {
@@ -215,7 +215,7 @@ impl File {
     /// - Growing succeeds only if it does not require allocating new blocks (i.e., the target
     ///   position lies within already allocated blocks or holes are not introduced).
     pub async fn truncate(&mut self, new_size: u64) -> Result<(), Ext4Error> {
-        let block_size = self.fs.0.superblock.block_size;
+        let block_size = self.fs.0.superblock.block_size();
 
         // Fast path: no change.
         if new_size == self.inode.metadata.size_in_bytes {
@@ -230,7 +230,7 @@ impl File {
             if pos == 0 {
                 return Ok(None);
             }
-            let block_size = fs.0.superblock.block_size;
+            let block_size = fs.0.superblock.block_size();
             let mut it = FileBlocks::new(fs.clone(), inode)?;
             let num_blocks = (pos - 1) / block_size.to_nz_u64();
             for _ in 0..num_blocks {
@@ -280,7 +280,7 @@ impl File {
             return Ok(0);
         }
 
-        let block_size = self.fs.0.superblock.block_size;
+        let block_size = self.fs.0.superblock.block_size();
 
         // Get the block to write to.
         let block_index = if let Some(block_index) = self.block_index {
@@ -359,7 +359,7 @@ impl File {
 
         // Advance the block iterator by the number of whole blocks in
         // `position`.
-        let num_blocks = position / self.fs.0.superblock.block_size.to_nz_u64();
+        let num_blocks = position / self.fs.0.superblock.block_size().to_nz_u64();
         for _ in 0..num_blocks {
             self.file_blocks.next().await;
         }

@@ -84,7 +84,7 @@ impl ReadDir {
             file_blocks: FileBlocks::new(fs.clone(), inode)?,
             block_index: None,
             is_first_block: true,
-            block: vec![0; fs.0.superblock.block_size.to_usize()],
+            block: vec![0; fs.0.superblock.block_size().to_usize()],
             offset_within_block: 0,
             is_done: false,
             has_htree,
@@ -115,7 +115,7 @@ impl ReadDir {
 
         // If a block has been fully processed, move to the next block
         // on the next iteration.
-        let block_size = self.fs.0.superblock.block_size;
+        let block_size = self.fs.0.superblock.block_size();
         if self.offset_within_block >= block_size {
             self.is_first_block = false;
             self.block_index = None;

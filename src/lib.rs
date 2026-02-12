@@ -322,12 +322,12 @@ impl Ext4 {
         }
 
         // Check the block index.
-        if block_index >= self.0.superblock.blocks_count {
+        if block_index >= self.0.superblock.blocks_count() {
             return Err(err());
         }
 
         // The start of the read must be less than the block size.
-        let block_size = self.0.superblock.block_size;
+        let block_size = self.0.superblock.block_size();
         if offset_within_block >= block_size {
             return Err(err());
         }
@@ -344,7 +344,7 @@ impl Ext4 {
         self.0
             .reader
             .read(
-                block_index as u64 * self.0.superblock.block_size.to_u64()
+                block_index as u64 * self.0.superblock.block_size().to_u64()
                     + offset_within_block as u64,
                 dst,
             )
@@ -378,12 +378,12 @@ impl Ext4 {
         }
 
         // Check the block index.
-        if block_index >= self.0.superblock.blocks_count {
+        if block_index >= self.0.superblock.blocks_count() {
             return Err(err());
         }
 
         // The start of the write must be less than the block size.
-        let block_size = self.0.superblock.block_size;
+        let block_size = self.0.superblock.block_size();
         if offset_within_block >= block_size {
             return Err(err());
         }
@@ -400,7 +400,7 @@ impl Ext4 {
         if let Some(writer) = &self.0.writer {
             writer
                 .write(
-                    block_index as u64 * self.0.superblock.block_size.to_u64()
+                    block_index as u64 * self.0.superblock.block_size().to_u64()
                         + offset_within_block as u64,
                     src,
                 )

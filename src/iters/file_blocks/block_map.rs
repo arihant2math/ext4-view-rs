@@ -192,7 +192,7 @@ struct IndirectBlockIter {
 
 impl IndirectBlockIter {
     async fn new(fs: Ext4, block_index: u32) -> Result<Self, Ext4Error> {
-        let mut block = vec![0u8; fs.0.superblock.block_size.to_usize()];
+        let mut block = vec![0u8; fs.0.superblock.block_size().to_usize()];
         fs.read_from_block(FsBlockIndex::from(block_index), 0, &mut block)
             .await?;
 
