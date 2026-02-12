@@ -112,6 +112,7 @@ impl Superblock {
 
         let block_group_descriptor_size =
             if incompatible_features.contains(IncompatibleFeatures::IS_64BIT) {
+                assert_eq!(s_desc_size, 64);
                 s_desc_size
             } else {
                 32
@@ -184,9 +185,7 @@ impl Superblock {
             journal_inode,
             label,
             uuid,
-            data: bytes[..Self::SIZE_IN_BYTES_ON_DISK]
-                .try_into()
-                .unwrap(),
+            data: bytes[..Self::SIZE_IN_BYTES_ON_DISK].try_into().unwrap(),
         })
     }
 
