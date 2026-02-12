@@ -388,7 +388,7 @@ mod tests {
         let (dir_inode, path) =
             resolve_path(fs, mkp("/dir1/dir2"), follow).await.unwrap();
         assert_eq!(path, "/dir1/dir2");
-        assert!(dir_inode.metadata.is_dir());
+        assert!(dir_inode.metadata().is_dir());
 
         // Check directory with trailing separator.
         let (inode, path) =
@@ -449,7 +449,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(path, "/dir1/dir2/sym_abs");
-        assert!(inode.metadata.is_symlink());
+        assert!(inode.metadata().is_symlink());
         let (inode, path) = resolve_path(
             fs,
             mkp("/dir1/dir2/sym_rel"),
@@ -458,7 +458,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(path, "/dir1/dir2/sym_rel");
-        assert!(inode.metadata.is_symlink());
+        assert!(inode.metadata().is_symlink());
 
         // Error: not absolute.
         assert!(matches!(

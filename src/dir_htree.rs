@@ -501,7 +501,7 @@ mod tests {
     async fn test_read_dot_or_dotdot() {
         let fs = crate::test_util::load_test_disk1().await;
 
-        let mut block = vec![0; fs.0.superblock.block_size.to_usize()];
+        let mut block = vec![0; fs.0.superblock.block_size().to_usize()];
 
         // Read the root block of an htree.
         let inode = fs
@@ -577,7 +577,6 @@ mod tests {
     ///
     /// Returns the number of entries.
     #[cfg(feature = "std")]
-    #[track_caller]
     async fn compare_all_entries(fs: &Ext4, dir: Path<'_>) -> usize {
         let dir_inode =
             fs.path_to_inode(dir, FollowSymlinks::All).await.unwrap();
@@ -660,14 +659,14 @@ mod tests {
 
         // Grab a convenient inode and overwrite its inline data with
         // the new extent tree.
-        let mut inode = fs
+        let inode = fs
             .path_to_inode(
                 "/medium_dir".try_into().unwrap(),
                 FollowSymlinks::All,
             )
             .await
             .unwrap();
-        inode.inline_data.copy_from_slice(&extents);
+        inode.inline_data().copy_from_slice(&extents);
 
         // Verify the extents.
         let extents: Vec<_> = Extents::new(fs.clone(), &inode)

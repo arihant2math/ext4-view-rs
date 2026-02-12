@@ -114,7 +114,7 @@ pub struct Inode {
     file_type: FileType,
 
     /// Full inode data as read from disk.
-    inode_data: Vec<u8>,
+    pub(crate) inode_data: Vec<u8>,
 
     /// Checksum seed used in various places.
     checksum_base: Checksum,
