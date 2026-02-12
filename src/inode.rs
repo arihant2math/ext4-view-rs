@@ -108,11 +108,6 @@ pub struct Inode {
     /// This inode's index.
     pub index: InodeIndex,
 
-    /// Various kinds of file data can be stored within the inode, including:
-    /// * The root node of the extent tree.
-    /// * Target path for symlinks.
-    inline_data: [u8; Self::INLINE_DATA_LEN],
-
     /// Metadata about the file.
     metadata: Metadata,
 
@@ -170,8 +165,6 @@ impl Inode {
         let i_dtime = read_u32le(data, 0x14);
         let i_gid = read_u16le(data, 0x18);
         let i_links_count = read_u16le(data, 0x1a).into();
-        // OK to unwrap: already checked the length.
-        let i_block = data.get(0x28..0x28 + Self::INLINE_DATA_LEN).unwrap();
         let i_generation = read_u32le(data, 0x64);
         let i_size_high = read_u32le(data, 0x6c);
         let l_i_uid_high = read_u16le(data, 0x74 + 0x4);
@@ -209,8 +202,6 @@ impl Inode {
         Ok((
             Self {
                 index,
-                // OK to unwrap, we know `i_block` is 60 bytes.
-                inline_data: i_block.try_into().unwrap(),
                 metadata: Metadata {
                     size_in_bytes,
                     mode,
@@ -394,7 +385,7 @@ impl Inode {
         if self.metadata.size_in_bytes <= MAX_INLINE_SYMLINK_LEN {
             // OK to unwrap since we checked the size above.
             let len = usize::try_from(self.metadata.size_in_bytes).unwrap();
-            let target = &self.inline_data[..len];
+            let target = &self.inline_data()[..len];
 
             PathBuf::try_from(target)
                 .map_err(|_| CorruptKind::SymlinkTarget(self.index).into())
@@ -420,7 +411,10 @@ impl Inode {
     }
 
     pub(crate) fn inline_data(&self) -> [u8; Self::INLINE_DATA_LEN] {
-        self.inline_data
+        // OK to unwrap: already checked the length.
+        let i_block = self.inode_data.get(0x28..0x28 + Self::INLINE_DATA_LEN).unwrap();
+        // OK to unwrap, we know `i_block` is 60 bytes.
+        i_block.try_into().unwrap()
     }
 
     /// Get the inode's metadata.
