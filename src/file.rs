@@ -338,7 +338,9 @@ impl File {
 
         // If we extended past previous EOF, update inode size without allocating.
         if new_position > self.inode.metadata().size_in_bytes {
-            self.inode.metadata().size_in_bytes = new_position;
+            let mut metadata = self.inode.metadata();
+            metadata.size_in_bytes = new_position;
+            self.inode.set_metadata(metadata);
             // Persist the inode metadata update.
             self.inode.write(&self.fs).await?;
         }
