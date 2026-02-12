@@ -134,8 +134,8 @@ impl<'a> BlockMapLoader<'a> {
             revoked_blocks: Vec::new(),
             journal_block_iter,
             block_index: 0,
-            block: vec![0; fs.0.superblock.block_size.to_usize()],
-            data_block: vec![0; fs.0.superblock.block_size.to_usize()],
+            block: vec![0; fs.0.superblock.block_size().to_usize()],
+            data_block: vec![0; fs.0.superblock.block_size().to_usize()],
             sequence: superblock.sequence,
             is_done: false,
         })

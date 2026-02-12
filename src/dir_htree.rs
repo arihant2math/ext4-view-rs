@@ -365,7 +365,7 @@ pub(crate) async fn get_dir_entry_via_htree(
 ) -> Result<DirEntry, Ext4Error> {
     assert!(inode.flags.contains(InodeFlags::DIRECTORY_HTREE));
 
-    let block_size = fs.0.superblock.block_size;
+    let block_size = fs.0.superblock.block_size();
     let mut block = vec![0; block_size.to_usize()];
 
     // Read the first block of the file, which contains the root node of

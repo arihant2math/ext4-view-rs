@@ -20,11 +20,11 @@ use core::num::NonZero;
 /// Information about the filesystem.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Superblock {
-    pub(crate) block_size: BlockSize,
-    pub(crate) blocks_count: u64,
-    pub(crate) inode_size: u16,
-    pub(crate) inodes_per_block_group: NonZero<u32>,
-    pub(crate) block_group_descriptor_size: u16,
+    block_size: BlockSize,
+    blocks_count: u64,
+    inode_size: u16,
+    inodes_per_block_group: NonZero<u32>,
+    block_group_descriptor_size: u16,
     pub(crate) num_block_groups: u32,
     pub(crate) incompatible_features: IncompatibleFeatures,
     pub(crate) read_only_compatible_features: ReadOnlyCompatibleFeatures,
@@ -184,6 +184,26 @@ impl Superblock {
             label,
             uuid,
         })
+    }
+
+    pub(crate) fn block_size(&self) -> BlockSize {
+        self.block_size
+    }
+
+    pub(crate) fn blocks_count(&self) -> u64 {
+        self.blocks_count
+    }
+
+    pub(crate) fn inode_size(&self) -> u16 {
+        self.inode_size
+    }
+
+    pub(crate) fn inodes_per_block_group(&self) -> NonZero<u32> {
+        self.inodes_per_block_group
+    }
+
+    pub(crate) fn block_group_descriptor_size(&self) -> u16 {
+        self.block_group_descriptor_size
     }
 }
 
