@@ -101,7 +101,7 @@ pub enum Ext4Error {
     Readonly,
 
     /// No space to perform operation
-    NoSpace
+    NoSpace,
 }
 
 impl Ext4Error {
