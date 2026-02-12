@@ -420,6 +420,17 @@ impl Ext4 {
         BitmapHandle::new(block_group.block_bitmap_block())
     }
 
+    async fn update_block_bitmap_checksum(
+        &self,
+        _block_group_index: u32,
+        _bitmap_handle: BitmapHandle,
+    ) -> Result<(), Ext4Error> {
+        // let checksum = bitmap_handle.calc_checksum(self).await?;
+        // self.0.block_group_descriptors[usize_from_u32(block_group_index)]
+        // .set_block_bitmap_checksum(&self.0.superblock, checksum);
+        Ok(())
+    }
+
     #[expect(unused)]
     /// Query the bitmap to check if a block is in use.
     async fn query_block(
@@ -447,7 +458,13 @@ impl Ext4 {
             self.get_block_bitmap_handle(block_group_index as u32);
         let block_offset =
             block_index % self.0.superblock.blocks_per_group() as u64;
-        bitmap_handle.set(block_offset as u32, used, self).await
+        bitmap_handle.set(block_offset as u32, used, self).await?;
+        self.update_block_bitmap_checksum(
+            block_group_index as u32,
+            bitmap_handle,
+        )
+        .await?;
+        Ok(())
     }
 
     /// Read the entire contents of a file into a `Vec<u8>`.

@@ -1,5 +1,8 @@
 use crate::block_index::FsBlockIndex;
+use crate::checksum::Checksum;
 use crate::{Ext4, Ext4Error};
+
+use alloc::vec;
 
 pub(crate) struct BitmapHandle {
     block: FsBlockIndex,
@@ -79,5 +82,17 @@ impl BitmapHandle {
             }
         }
         Ok(None)
+    }
+
+    pub(crate) async fn calc_checksum(
+        &self,
+        ext4: &Ext4,
+    ) -> Result<u32, Ext4Error> {
+        let mut dst = vec![0; ext4.0.superblock.block_size().to_usize()];
+        ext4.read_from_block(self.block, 0, &mut dst).await?;
+        let mut checksum =
+            Checksum::with_seed(ext4.0.superblock.checksum_seed());
+        checksum.update(&dst);
+        Ok(checksum.finalize())
     }
 }
