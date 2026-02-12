@@ -1,0 +1,83 @@
+use crate::block_index::FsBlockIndex;
+use crate::{Ext4, Ext4Error};
+
+pub(crate) struct BitmapHandle {
+    block: FsBlockIndex,
+}
+
+#[expect(unused)]
+impl BitmapHandle {
+    pub(crate) fn new(block: FsBlockIndex) -> Self {
+        Self { block }
+    }
+
+    /// Query the bitmap for the value of bit `n`.
+    pub(crate) async fn query(
+        &self,
+        n: u32,
+        ext4: &Ext4,
+    ) -> Result<bool, Ext4Error> {
+        let mut dst = [0; 1];
+        let byte_index = n / 8;
+        let bit_index = n % 8;
+        ext4.read_from_block(self.block, byte_index, &mut dst)
+            .await?;
+        // Get the value of the bit at `bit_index` in `dst[0]`.
+        Ok((dst[0] & (1 << bit_index)) != 0)
+    }
+
+    /// Set the value of bit `n` in the bitmap to `value`.
+    pub(crate) async fn set(
+        &self,
+        n: u32,
+        value: bool,
+        ext4: &Ext4,
+    ) -> Result<(), Ext4Error> {
+        let mut dst = [0; 1];
+        let byte_index = n / 8;
+        let bit_index = n % 8;
+        ext4.read_from_block(self.block, byte_index, &mut dst)
+            .await?;
+        if value {
+            dst[0] |= 1 << bit_index;
+        } else {
+            dst[0] &= !(1 << bit_index);
+        }
+        ext4.write_to_block(self.block, byte_index, &dst).await?;
+        Ok(())
+    }
+
+    /// Find the first bit in the bitmap with value `value`, and return its index.
+    /// Returns `Ok(None)` if no such bit is found.
+    pub(crate) async fn find_first(
+        &self,
+        value: bool,
+        ext4: &Ext4,
+    ) -> Result<Option<u32>, Ext4Error> {
+        let mut dst = [0; 1];
+        for byte_index in 0..ext4.0.superblock.block_size().to_u32() {
+            ext4.read_from_block(self.block, byte_index, &mut dst)
+                .await?;
+            if value {
+                // Look for a bit with value 1.
+                if dst[0] != 0 {
+                    for bit_index in 0..8 {
+                        if (dst[0] & (1 << bit_index)) != 0 {
+                            return Ok(Some(byte_index * 8 + bit_index));
+                        }
+                    }
+                }
+            } else {
+                // Look for a bit with value 0.
+                if dst[0] != 0xFF {
+                    for bit_index in 0..8 {
+                        if (dst[0] & (1 << bit_index)) == 0 {
+                            return Ok(Some(byte_index * 8 + bit_index));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+}
