@@ -33,6 +33,7 @@ pub(crate) struct Superblock {
     journal_inode: Option<InodeIndex>,
     label: Label,
     uuid: Uuid,
+    data: [u8; Self::SIZE_IN_BYTES_ON_DISK],
 }
 
 impl Superblock {
@@ -183,6 +184,9 @@ impl Superblock {
             journal_inode,
             label,
             uuid,
+            data: bytes[..Self::SIZE_IN_BYTES_ON_DISK]
+                .try_into()
+                .unwrap(),
         })
     }
 
@@ -320,6 +324,9 @@ mod tests {
                     0xb6, 0x20, 0x21, 0xd2, 0x70, 0xe5, 0x4d, 0x2c, 0x8a, 0x2d,
                     0x50, 0x93, 0x4f, 0x1b, 0xaf, 0x77
                 ]),
+                data: data[..Superblock::SIZE_IN_BYTES_ON_DISK]
+                    .try_into()
+                    .unwrap(),
             }
         );
     }
