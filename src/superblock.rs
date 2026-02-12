@@ -13,8 +13,8 @@ use crate::features::{
     CompatibleFeatures, IncompatibleFeatures, ReadOnlyCompatibleFeatures,
 };
 use crate::inode::InodeIndex;
-use crate::util::{read_u16le, read_u32le, u64_from_hilo};
-use crate::{Label, Uuid};
+use crate::util::{read_u16le, read_u32le, u64_from_hilo, write_u32le};
+use crate::{Ext4, Label, Uuid};
 use core::num::NonZero;
 
 /// Information about the filesystem.
@@ -189,6 +189,32 @@ impl Superblock {
         })
     }
 
+    fn update_checksum(&mut self) {
+        if !self
+            .read_only_compatible_features
+            .contains(ReadOnlyCompatibleFeatures::METADATA_CHECKSUMS)
+        {
+            return;
+        }
+        let mut checksum = Checksum::new();
+        checksum.update(&self.data[..0x3fc]);
+        let checksum_bytes = checksum.finalize().to_le_bytes();
+        self.data[0x3fc..].copy_from_slice(&checksum_bytes);
+    }
+
+    #[expect(unused)]
+    pub(crate) async fn write(&mut self, ext4: &Ext4) -> Result<(), Ext4Error> {
+        self.update_checksum();
+        // start byte
+        let offset = 1024;
+        let writer = ext4.0.writer.as_ref().ok_or(Ext4Error::Readonly)?;
+        writer
+            .write(offset, &self.data)
+            .await
+            .map_err(Ext4Error::Io)?;
+        Ok(())
+    }
+
     pub(crate) fn block_size(&self) -> BlockSize {
         self.block_size
     }
@@ -241,6 +267,16 @@ impl Superblock {
 
     pub(crate) fn uuid(&self) -> Uuid {
         self.uuid
+    }
+
+    #[expect(unused)]
+    pub(crate) fn free_inodes_count(&self) -> u32 {
+        read_u32le(&self.data, 0x10)
+    }
+
+    #[expect(unused)]
+    pub(crate) fn set_free_inodes_count(&mut self, count: u32) {
+        write_u32le(&mut self.data, 0x10, count);
     }
 }
 
