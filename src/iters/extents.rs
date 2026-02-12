@@ -166,7 +166,7 @@ impl Extents {
                 inode.inline_data.to_vec(),
                 inode.index,
             )?],
-            checksum_base: inode.checksum_base.clone(),
+            checksum_base: inode.checksum_base().clone(),
             is_done: false,
         })
     }

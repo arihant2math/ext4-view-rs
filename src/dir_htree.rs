@@ -200,7 +200,7 @@ async fn read_root_block(
         block_index,
         is_first: true,
         has_htree: true,
-        checksum_base: inode.checksum_base.clone(),
+        checksum_base: inode.checksum_base().clone(),
     };
     dir_block.read(block).await
 }
@@ -270,7 +270,7 @@ async fn block_from_file_block(
     inode: &Inode,
     relative_block: FileBlockIndex,
 ) -> Result<FsBlockIndex, Ext4Error> {
-    if inode.flags.contains(InodeFlags::EXTENTS) {
+    if inode.flags().contains(InodeFlags::EXTENTS) {
         let extent = find_extent_for_block(fs, inode, relative_block).await?;
         let block_within_extent = relative_block
             .checked_sub(extent.block_within_file)
@@ -330,7 +330,7 @@ async fn find_leaf_node(
             block_index,
             is_first: false,
             has_htree: true,
-            checksum_base: inode.checksum_base.clone(),
+            checksum_base: inode.checksum_base().clone(),
         };
         dir_block.read(block).await?;
 
@@ -363,7 +363,7 @@ pub(crate) async fn get_dir_entry_via_htree(
     inode: &Inode,
     name: DirEntryName<'_>,
 ) -> Result<DirEntry, Ext4Error> {
-    assert!(inode.flags.contains(InodeFlags::DIRECTORY_HTREE));
+    assert!(inode.flags().contains(InodeFlags::DIRECTORY_HTREE));
 
     let block_size = fs.0.superblock.block_size();
     let mut block = vec![0; block_size.to_usize()];

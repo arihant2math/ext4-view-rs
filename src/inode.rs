@@ -117,13 +117,13 @@ pub struct Inode {
     pub metadata: Metadata,
 
     /// Full inode data as read from disk.
-    pub inode_data: Vec<u8>,
+    inode_data: Vec<u8>,
 
     /// Internal inode flags.
-    pub flags: InodeFlags,
+    flags: InodeFlags,
 
     /// Checksum seed used in various places.
-    pub checksum_base: Checksum,
+    checksum_base: Checksum,
 
     /// Number of blocks in the file (including holes).
     file_size_in_blocks: u32,
@@ -425,6 +425,20 @@ impl Inode {
     #[must_use]
     pub fn file_size_in_blocks(&self) -> u32 {
         self.file_size_in_blocks
+    }
+
+    pub(crate) fn checksum_base(&self) -> &Checksum {
+        &self.checksum_base
+    }
+
+    /// Get the inode's flags.
+    pub fn flags(&self) -> InodeFlags {
+        self.flags
+    }
+
+    /// Set the inode's flags.
+    pub fn set_flags(&mut self, flags: InodeFlags) {
+        self.flags = flags;
     }
 }
 

@@ -72,9 +72,9 @@ impl ReadDir {
         inode: &Inode,
         path: PathBuf,
     ) -> Result<Self, Ext4Error> {
-        let has_htree = inode.flags.contains(InodeFlags::DIRECTORY_HTREE);
+        let has_htree = inode.flags().contains(InodeFlags::DIRECTORY_HTREE);
 
-        if inode.flags.contains(InodeFlags::DIRECTORY_ENCRYPTED) {
+        if inode.flags().contains(InodeFlags::DIRECTORY_ENCRYPTED) {
             return Err(Ext4Error::Encrypted);
         }
 
@@ -88,7 +88,7 @@ impl ReadDir {
             offset_within_block: 0,
             is_done: false,
             has_htree,
-            checksum_base: inode.checksum_base.clone(),
+            checksum_base: inode.checksum_base().clone(),
             inode: inode.index,
         })
     }

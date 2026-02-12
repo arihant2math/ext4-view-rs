@@ -33,7 +33,7 @@ pub(crate) struct FileBlocks(FileBlocksInner);
 
 impl FileBlocks {
     pub(crate) fn new(fs: Ext4, inode: &Inode) -> Result<Self, Ext4Error> {
-        if inode.flags.contains(InodeFlags::EXTENTS) {
+        if inode.flags().contains(InodeFlags::EXTENTS) {
             Ok(Self(FileBlocksInner::ExtentsBlocks(ExtentsBlocks::new(
                 fs, inode,
             )?)))

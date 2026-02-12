@@ -25,11 +25,11 @@ pub async fn get_dir_entry_inode_by_name(
 ) -> Result<Inode, Ext4Error> {
     assert!(dir_inode.metadata.is_dir());
 
-    if dir_inode.flags.contains(InodeFlags::DIRECTORY_ENCRYPTED) {
+    if dir_inode.flags().contains(InodeFlags::DIRECTORY_ENCRYPTED) {
         return Err(Ext4Error::Encrypted);
     }
 
-    if dir_inode.flags.contains(InodeFlags::DIRECTORY_HTREE) {
+    if dir_inode.flags().contains(InodeFlags::DIRECTORY_HTREE) {
         let entry = get_dir_entry_via_htree(fs, dir_inode, name).await?;
         return Inode::read(fs, entry.inode).await;
     }
