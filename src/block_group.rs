@@ -49,6 +49,12 @@ impl DerefMut for BlockGroupDescriptorBytes {
     }
 }
 
+#[expect(unused)]
+pub(crate) enum TruncatedChecksum {
+    Truncated(u16),
+    Full(u32),
+}
+
 #[derive(Debug)]
 pub(crate) struct BlockGroupDescriptor {
     index: BlockGroupIndex,
@@ -282,6 +288,81 @@ impl BlockGroupDescriptor {
         self.update_checksum(superblock);
     }
 
+    pub(crate) fn block_bitmap_checksum(&self) -> TruncatedChecksum {
+        const LO_OFFSET: usize = 0x18;
+        const HI_OFFSET: usize = 0x38;
+        match self.bytes {
+            BlockGroupDescriptorBytes::OnDisk32(bytes) => {
+                TruncatedChecksum::Truncated(read_u16le(&bytes, LO_OFFSET))
+            }
+            BlockGroupDescriptorBytes::OnDisk64(bytes) => {
+                TruncatedChecksum::Full(u32_from_hilo(
+                    read_u16le(&bytes, HI_OFFSET),
+                    read_u16le(&bytes, LO_OFFSET),
+                ))
+            }
+        }
+    }
+
+    pub(crate) fn set_block_bitmap_checksum(
+        &mut self,
+        superblock: &Superblock,
+        checksum: u32,
+    ) {
+        const LO_OFFSET: usize = 0x18;
+        const HI_OFFSET: usize = 0x38;
+        let (hi, lo) = u32_to_hilo(checksum);
+        match &mut self.bytes {
+            BlockGroupDescriptorBytes::OnDisk32(bytes) => {
+                assert_eq!(hi, 0);
+                write_u16le(bytes, LO_OFFSET, lo);
+            }
+            BlockGroupDescriptorBytes::OnDisk64(bytes) => {
+                write_u16le(bytes, HI_OFFSET, hi);
+                write_u16le(bytes, LO_OFFSET, lo);
+            }
+        };
+        self.update_checksum(superblock);
+    }
+
+    pub(crate) fn inode_bitmap_checksum(&self) -> TruncatedChecksum {
+        const LO_OFFSET: usize = 0x1A;
+        const HI_OFFSET: usize = 0x3A;
+
+        match self.bytes {
+            BlockGroupDescriptorBytes::OnDisk32(bytes) => {
+                TruncatedChecksum::Truncated(read_u16le(&bytes, LO_OFFSET))
+            }
+            BlockGroupDescriptorBytes::OnDisk64(bytes) => {
+                TruncatedChecksum::Full(u32_from_hilo(
+                    read_u16le(&bytes, HI_OFFSET),
+                    read_u16le(&bytes, LO_OFFSET),
+                ))
+            }
+        }
+    }
+
+    pub(crate) fn set_inode_bitmap_checksum(
+        &mut self,
+        superblock: &Superblock,
+        checksum: u32,
+    ) {
+        const LO_OFFSET: usize = 0x1A;
+        const HI_OFFSET: usize = 0x3A;
+        let (hi, lo) = u32_to_hilo(checksum);
+        match &mut self.bytes {
+            BlockGroupDescriptorBytes::OnDisk32(bytes) => {
+                assert_eq!(hi, 0);
+                write_u16le(bytes, LO_OFFSET, lo);
+            }
+            BlockGroupDescriptorBytes::OnDisk64(bytes) => {
+                write_u16le(bytes, HI_OFFSET, hi);
+                write_u16le(bytes, LO_OFFSET, lo);
+            }
+        };
+        self.update_checksum(superblock);
+    }
+
     fn checksum(&self) -> u16 {
         read_u16le(self.bytes.deref(), Self::BG_CHECKSUM_OFFSET)
     }
@@ -355,6 +436,7 @@ impl BlockGroupDescriptor {
             // there was a separate feature just for block group
             // descriptors. Add support for that here.
         }
+        // TODO: Check checksums for the block bitmap and inode bitmap
 
         Ok(block_group_descriptor)
     }
