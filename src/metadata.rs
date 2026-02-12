@@ -12,7 +12,7 @@ use crate::inode::InodeMode;
 use core::time::Duration;
 
 /// Metadata information about a file.
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Metadata {
     /// Size in bytes of the file data.
     pub size_in_bytes: u64,
