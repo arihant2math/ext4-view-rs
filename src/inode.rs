@@ -466,7 +466,7 @@ fn get_inode_location(
         inodes_per_block_group: sb.inodes_per_block_group(),
         inode_size: sb.inode_size(),
         block_size: sb.block_size(),
-        inode_table_first_block: group.inode_table_first_block,
+        inode_table_first_block: group.inode_table_first_block(),
     };
 
     let byte_offset_within_group = u64::from(index_within_group)
@@ -476,7 +476,7 @@ fn get_inode_location(
     let byte_offset_of_group = sb
         .block_size()
         .to_u64()
-        .checked_mul(group.inode_table_first_block)
+        .checked_mul(group.inode_table_first_block())
         .ok_or_else(err)?;
 
     // Absolute byte index of the inode.

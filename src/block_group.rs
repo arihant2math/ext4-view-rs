@@ -12,44 +12,170 @@ use crate::checksum::Checksum;
 use crate::error::{CorruptKind, Ext4Error};
 use crate::features::{IncompatibleFeatures, ReadOnlyCompatibleFeatures};
 use crate::superblock::Superblock;
-use crate::util::{read_u16le, read_u32le, u64_from_hilo, usize_from_u32};
+use crate::util::{
+    read_u16le, read_u32le, u32_from_hilo, u64_from_hilo, usize_from_u32,
+};
 use alloc::vec;
 use alloc::vec::Vec;
+use core::ops::Deref;
 
 pub(crate) type BlockGroupIndex = u32;
 
-#[derive(Debug)]
-pub(crate) struct BlockGroupDescriptor {
-    pub(crate) inode_table_first_block: FsBlockIndex,
-    checksum: u16,
+#[derive(Copy, Clone, Debug)]
+enum BlockGroupDescriptorBytes {
+    OnDisk32([u8; BlockGroupDescriptor::SIZE_IN_BYTES_ON_DISK_32]),
+    OnDisk64([u8; BlockGroupDescriptor::SIZE_IN_BYTES_ON_DISK_64]),
 }
 
+impl Deref for BlockGroupDescriptorBytes {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        match self {
+            BlockGroupDescriptorBytes::OnDisk32(bytes) => bytes,
+            BlockGroupDescriptorBytes::OnDisk64(bytes) => bytes,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct BlockGroupDescriptor {
+    bytes: BlockGroupDescriptorBytes,
+}
+
+#[expect(dead_code)]
 impl BlockGroupDescriptor {
+    pub(crate) const SIZE_IN_BYTES_ON_DISK_32: usize = 32;
+    pub(crate) const SIZE_IN_BYTES_ON_DISK_64: usize = 64;
     const BG_CHECKSUM_OFFSET: usize = 0x1e;
 
+    /// Parse a block group descriptor from raw bytes read from disk.
+    ///
+    /// # Panics
+    /// If `bytes` is not at least [`Self::SIZE_IN_BYTES_ON_DISK`] bytes long.
     fn from_bytes(superblock: &Superblock, bytes: &[u8]) -> Self {
-        const BG_INODE_TABLE_HI_OFFSET: usize = 0x28;
-
-        let bg_inode_table_lo = read_u32le(bytes, 0x8);
-        let bg_checksum = read_u16le(bytes, Self::BG_CHECKSUM_OFFSET);
-
-        // Get the high bits of the inode table block.
-        let bg_inode_table_hi = if superblock
+        if superblock
             .incompatible_features()
             .contains(IncompatibleFeatures::IS_64BIT)
         {
-            read_u32le(bytes, BG_INODE_TABLE_HI_OFFSET)
+            assert_eq!(bytes.len(), Self::SIZE_IN_BYTES_ON_DISK_64);
+            Self {
+                bytes: BlockGroupDescriptorBytes::OnDisk64(
+                    bytes[..Self::SIZE_IN_BYTES_ON_DISK_64].try_into().unwrap(),
+                ),
+            }
         } else {
-            0
+            assert_eq!(bytes.len(), Self::SIZE_IN_BYTES_ON_DISK_32);
+            Self {
+                bytes: BlockGroupDescriptorBytes::OnDisk32(
+                    bytes[..Self::SIZE_IN_BYTES_ON_DISK_32].try_into().unwrap(),
+                ),
+            }
+        }
+    }
+
+    pub(crate) fn block_bitmap_block(&self) -> FsBlockIndex {
+        const LO_OFFSET: usize = 0x0;
+        const HI_OFFSET: usize = 0x20;
+        let (bg_block_bitmap_hi, bg_block_bitmap_lo) = match self.bytes {
+            BlockGroupDescriptorBytes::OnDisk32(bytes) => {
+                (0, read_u32le(&bytes, LO_OFFSET))
+            }
+            BlockGroupDescriptorBytes::OnDisk64(bytes) => {
+                (read_u32le(&bytes, HI_OFFSET), read_u32le(&bytes, LO_OFFSET))
+            }
         };
 
-        let inode_table_first_block =
-            u64_from_hilo(bg_inode_table_hi, bg_inode_table_lo);
+        u64_from_hilo(bg_block_bitmap_hi, bg_block_bitmap_lo)
+            .try_into()
+            .unwrap()
+    }
 
-        Self {
-            inode_table_first_block,
-            checksum: bg_checksum,
-        }
+    pub(crate) fn inode_bitmap_block(&self) -> FsBlockIndex {
+        const LO_OFFSET: usize = 0x4;
+        const HI_OFFSET: usize = 0x24;
+        let (bg_inode_bitmap_hi, bg_inode_bitmap_lo) = match self.bytes {
+            BlockGroupDescriptorBytes::OnDisk32(bytes) => {
+                (0, read_u32le(&bytes, LO_OFFSET))
+            }
+            BlockGroupDescriptorBytes::OnDisk64(bytes) => {
+                (read_u32le(&bytes, HI_OFFSET), read_u32le(&bytes, LO_OFFSET))
+            }
+        };
+
+        u64_from_hilo(bg_inode_bitmap_hi, bg_inode_bitmap_lo)
+            .try_into()
+            .unwrap()
+    }
+
+    pub(crate) fn inode_table_first_block(&self) -> FsBlockIndex {
+        const LO_OFFSET: usize = 0x8;
+        const HI_OFFSET: usize = 0x28;
+        let (bg_inode_table_hi, bg_inode_table_lo) = match self.bytes {
+            BlockGroupDescriptorBytes::OnDisk32(bytes) => {
+                (0, read_u32le(&bytes, LO_OFFSET))
+            }
+            BlockGroupDescriptorBytes::OnDisk64(bytes) => {
+                (read_u32le(&bytes, HI_OFFSET), read_u32le(&bytes, LO_OFFSET))
+            }
+        };
+
+        u64_from_hilo(bg_inode_table_hi, bg_inode_table_lo)
+            .try_into()
+            .unwrap()
+    }
+
+    pub(crate) fn free_blocks_count(&self) -> u32 {
+        const LO_OFFSET: usize = 0xC;
+        const HI_OFFSET: usize = 0x2C;
+        let (bg_free_blocks_count_hi, bg_free_blocks_count_lo) = match self
+            .bytes
+        {
+            BlockGroupDescriptorBytes::OnDisk32(bytes) => {
+                (0, read_u16le(&bytes, LO_OFFSET))
+            }
+            BlockGroupDescriptorBytes::OnDisk64(bytes) => {
+                (read_u16le(&bytes, HI_OFFSET), read_u16le(&bytes, LO_OFFSET))
+            }
+        };
+
+        u32_from_hilo(bg_free_blocks_count_hi, bg_free_blocks_count_lo)
+    }
+
+    pub(crate) fn free_inodes_count(&self) -> u32 {
+        const LO_OFFSET: usize = 0xE;
+        const HI_OFFSET: usize = 0x2E;
+        let (bg_free_inodes_count_hi, bg_free_inodes_count_lo) = match self
+            .bytes
+        {
+            BlockGroupDescriptorBytes::OnDisk32(bytes) => {
+                (0, read_u16le(&bytes, LO_OFFSET))
+            }
+            BlockGroupDescriptorBytes::OnDisk64(bytes) => {
+                (read_u16le(&bytes, HI_OFFSET), read_u16le(&bytes, LO_OFFSET))
+            }
+        };
+
+        u32_from_hilo(bg_free_inodes_count_hi, bg_free_inodes_count_lo)
+    }
+
+    pub(crate) fn used_dirs_count(&self) -> u32 {
+        const LO_OFFSET: usize = 0x10;
+        const HI_OFFSET: usize = 0x30;
+        let (bg_used_dirs_count_hi, bg_used_dirs_count_lo) = match self.bytes {
+            BlockGroupDescriptorBytes::OnDisk32(bytes) => {
+                (0, read_u16le(&bytes, LO_OFFSET))
+            }
+            BlockGroupDescriptorBytes::OnDisk64(bytes) => {
+                (read_u16le(&bytes, HI_OFFSET), read_u16le(&bytes, LO_OFFSET))
+            }
+        };
+
+        u32_from_hilo(bg_used_dirs_count_hi, bg_used_dirs_count_lo)
+    }
+
+    pub(crate) fn checksum(&self) -> u16 {
+        read_u16le(self.bytes.deref(), Self::BG_CHECKSUM_OFFSET)
     }
 
     /// Map from a block group descriptor index to the absolute byte
@@ -107,7 +233,7 @@ impl BlockGroupDescriptor {
             // Truncate to the lower 16 bits.
             let checksum = u16::try_from(checksum.finalize() & 0xffff).unwrap();
 
-            if checksum != block_group_descriptor.checksum {
+            if checksum != block_group_descriptor.checksum() {
                 return Err(CorruptKind::BlockGroupDescriptorChecksum(
                     bgd_index,
                 )
