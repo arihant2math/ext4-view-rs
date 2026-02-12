@@ -14,9 +14,7 @@ use async_trait::async_trait;
 use core::error::Error;
 use core::fmt::{self, Display, Formatter};
 #[cfg(feature = "std")]
-use {
-    std::sync::Mutex,
-};
+use std::sync::Mutex;
 
 /// Interface used by [`Ext4`] to read the filesystem data from a storage
 /// file or device.
@@ -155,7 +153,6 @@ fn write_to_bytes(dst: &mut [u8], start_byte: u64, src: &[u8]) -> Option<()> {
 
     Some(())
 }
-
 
 #[cfg(test)]
 mod tests {
