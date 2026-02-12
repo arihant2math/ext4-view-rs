@@ -428,9 +428,7 @@ impl Ext4 {
         let bitmap_handle = BitmapHandle::new(block_group.block_bitmap_block());
         let block_offset =
             block_index % self.0.superblock.blocks_per_group() as u64;
-        bitmap_handle
-            .set(block_offset as u32, used, self)
-            .await
+        bitmap_handle.set(block_offset as u32, used, self).await
     }
 
     /// Read the entire contents of a file into a `Vec<u8>`.
@@ -444,9 +442,8 @@ impl Ext4 {
         inode: &Inode,
     ) -> Result<Vec<u8>, Ext4Error> {
         // Get the file size and initialize the output vector.
-        let file_size_in_bytes =
-            usize::try_from(inode.metadata().size_in_bytes)
-                .map_err(|_| Ext4Error::FileTooLarge)?;
+        let file_size_in_bytes = usize::try_from(inode.size_in_bytes())
+            .map_err(|_| Ext4Error::FileTooLarge)?;
         let mut dst = vec![0; file_size_in_bytes];
 
         // Use `File` to read the data in chunks.
@@ -540,10 +537,10 @@ impl Ext4 {
         ) -> Result<Vec<u8>, Ext4Error> {
             let inode = fs.path_to_inode(path, FollowSymlinks::All).await?;
 
-            if inode.metadata().is_dir() {
+            if inode.file_type().is_dir() {
                 return Err(Ext4Error::IsADirectory);
             }
-            if !inode.metadata().file_type.is_regular_file() {
+            if !inode.file_type().is_regular_file() {
                 return Err(Ext4Error::IsASpecialFile);
             }
 
@@ -634,7 +631,7 @@ impl Ext4 {
         ) -> Result<ReadDir, Ext4Error> {
             let inode = fs.path_to_inode(path, FollowSymlinks::All).await?;
 
-            if !inode.metadata().is_dir() {
+            if !inode.file_type().is_dir() {
                 return Err(Ext4Error::NotADirectory);
             }
 

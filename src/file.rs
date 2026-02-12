@@ -11,7 +11,6 @@ use crate::block_index::FsBlockIndex;
 use crate::error::Ext4Error;
 use crate::inode::Inode;
 use crate::iters::file_blocks::FileBlocks;
-use crate::metadata::Metadata;
 use crate::path::Path;
 use crate::resolve::FollowSymlinks;
 use crate::util::usize_from_u32;
@@ -44,10 +43,10 @@ impl File {
     ) -> Result<Self, Ext4Error> {
         let inode = fs.path_to_inode(path, FollowSymlinks::All).await?;
 
-        if inode.metadata().is_dir() {
+        if inode.file_type().is_dir() {
             return Err(Ext4Error::IsADirectory);
         }
-        if !inode.metadata().file_type.is_regular_file() {
+        if !inode.file_type().is_regular_file() {
             return Err(Ext4Error::IsASpecialFile);
         }
 
@@ -67,19 +66,15 @@ impl File {
         })
     }
 
-    /// Get the file metadata.
-    #[must_use]
-    pub fn metadata(&self) -> Metadata {
-        self.inode.metadata()
+    /// Access the internal [`Inode`] for this file. This allows for reading metadata etc.
+    pub fn inode(&self) -> &Inode {
+        &self.inode
     }
 
-    /// Set the file metadata.
-    pub async fn set_metadata(
-        &mut self,
-        metadata: Metadata,
-    ) -> Result<(), Ext4Error> {
-        self.inode.set_metadata(metadata);
-        self.inode.write(&self.fs).await
+    /// Mutable access to the internal [`Inode`] for this file. This allows for modifying metadata etc.
+    /// Note that changes to the inode will not be persisted until [`Inode::write`] is called.
+    pub fn inode_mut(&mut self) -> &mut Inode {
+        &mut self.inode
     }
 
     /// Read bytes from the file into `buf`, returning how many bytes
@@ -101,7 +96,7 @@ impl File {
         }
 
         // Nothing to do if already at the end of the file.
-        if self.position >= self.inode.metadata().size_in_bytes {
+        if self.position >= self.inode.size_in_bytes() {
             return Ok(0);
         }
 
@@ -215,7 +210,7 @@ impl File {
         let block_size = self.fs.0.superblock.block_size();
 
         // Fast path: no change.
-        if new_size == self.inode.metadata().size_in_bytes {
+        if new_size == self.inode.size_in_bytes() {
             return Ok(());
         }
 
@@ -244,7 +239,7 @@ impl File {
             }
         }
 
-        let curr_size = self.inode.metadata().size_in_bytes;
+        let curr_size = self.inode.size_in_bytes();
         if new_size < curr_size {
             // ensure we do not cross a block boundary in a way that would free blocks.
             let curr_block_num = curr_size / block_size.to_nz_u64();
@@ -253,7 +248,7 @@ impl File {
                 return Err(Ext4Error::Readonly);
             }
             // Within same block: just update size metadata.
-            self.inode.metadata().size_in_bytes = new_size;
+            self.inode.set_size_in_bytes(new_size);
             self.inode.write(&self.fs).await
         } else {
             // Grow: ensure target lies within already allocated blocks (no allocation).
@@ -264,7 +259,7 @@ impl File {
                 return Err(Ext4Error::Readonly);
             }
             // Otherwise permitted: update size metadata only.
-            self.inode.metadata().size_in_bytes = new_size;
+            self.inode.set_size_in_bytes(new_size);
             self.inode.write(&self.fs).await
         }
     }
@@ -335,10 +330,8 @@ impl File {
         self.position = new_position;
 
         // If we extended past previous EOF, update inode size without allocating.
-        if new_position > self.inode.metadata().size_in_bytes {
-            let mut metadata = self.inode.metadata();
-            metadata.size_in_bytes = new_position;
-            self.inode.set_metadata(metadata);
+        if new_position > self.inode.size_in_bytes() {
+            self.inode.set_size_in_bytes(new_position);
             // Persist the inode metadata update.
             self.inode.write(&self.fs).await?;
         }
