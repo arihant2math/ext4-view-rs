@@ -119,9 +119,6 @@ pub struct Inode {
     /// Full inode data as read from disk.
     inode_data: Vec<u8>,
 
-    /// Internal inode flags.
-    flags: InodeFlags,
-
     /// Checksum seed used in various places.
     checksum_base: Checksum,
 
@@ -173,7 +170,6 @@ impl Inode {
         let i_dtime = read_u32le(data, 0x14);
         let i_gid = read_u16le(data, 0x18);
         let i_links_count = read_u16le(data, 0x1a).into();
-        let i_flags = read_u32le(data, 0x20);
         // OK to unwrap: already checked the length.
         let i_block = data.get(0x28..0x28 + Self::INLINE_DATA_LEN).unwrap();
         let i_generation = read_u32le(data, 0x64);
@@ -230,7 +226,6 @@ impl Inode {
                     links_count: i_links_count,
                 },
                 inode_data: data.to_vec(),
-                flags: InodeFlags::from_bits_retain(i_flags),
                 checksum_base,
                 file_size_in_blocks,
             },
@@ -330,9 +325,6 @@ impl Inode {
         // i_gid
         self.inode_data[0x18..0x1a]
             .copy_from_slice(&(self.metadata.gid as u16).to_le_bytes());
-        // i_flags
-        self.inode_data[0x20..0x24]
-            .copy_from_slice(&self.flags.bits().to_le_bytes());
         // i_size_hi
         self.inode_data[0x6c..0x70].copy_from_slice(
             &((self.metadata.size_in_bytes >> 32) as u32).to_le_bytes(),
@@ -433,12 +425,15 @@ impl Inode {
 
     /// Get the inode's flags.
     pub fn flags(&self) -> InodeFlags {
-        self.flags
+        let i_flags = read_u32le(&self.inode_data, 0x20);
+        InodeFlags::from_bits_retain(i_flags)
     }
 
     /// Set the inode's flags.
     pub fn set_flags(&mut self, flags: InodeFlags) {
-        self.flags = flags;
+        // i_flags
+        self.inode_data[0x20..0x24]
+            .copy_from_slice(&flags.bits().to_le_bytes());
     }
 }
 
