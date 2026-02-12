@@ -76,7 +76,7 @@ impl BlockMap {
             // OK to unwrap: `i` is at most 14, so the product is at
             // most `14*4=56`, which fits in a `usize`.
             let src_offset: usize = i.checked_mul(size_of::<u32>()).unwrap();
-            *dst = read_u32le(&inode.inline_data, src_offset);
+            *dst = read_u32le(&inode.inline_data(), src_offset);
         }
 
         Self {

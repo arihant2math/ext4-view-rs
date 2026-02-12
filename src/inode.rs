@@ -111,7 +111,7 @@ pub struct Inode {
     /// Various kinds of file data can be stored within the inode, including:
     /// * The root node of the extent tree.
     /// * Target path for symlinks.
-    pub inline_data: [u8; Self::INLINE_DATA_LEN],
+    inline_data: [u8; Self::INLINE_DATA_LEN],
 
     /// Metadata about the file.
     pub metadata: Metadata,
@@ -417,6 +417,10 @@ impl Inode {
     #[must_use]
     pub fn file_size_in_blocks(&self) -> u32 {
         self.file_size_in_blocks
+    }
+
+    pub(crate) fn inline_data(&self) -> [u8; Self::INLINE_DATA_LEN] {
+        self.inline_data
     }
 
     pub(crate) fn checksum_base(&self) -> &Checksum {
