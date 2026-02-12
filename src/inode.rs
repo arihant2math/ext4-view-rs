@@ -209,7 +209,7 @@ impl Inode {
         Ok((
             Self {
                 index,
-                // OK to unwap, we know `i_block` is 60 bytes.
+                // OK to unwrap, we know `i_block` is 60 bytes.
                 inline_data: i_block.try_into().unwrap(),
                 metadata: Metadata {
                     size_in_bytes,
