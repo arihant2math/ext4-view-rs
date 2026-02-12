@@ -254,13 +254,13 @@ impl Ext4 {
     /// Get the filesystem label.
     #[must_use]
     pub fn label(&self) -> &Label {
-        &self.0.superblock.label
+        &self.0.superblock.label()
     }
 
     /// Get the filesystem UUID.
     #[must_use]
     pub fn uuid(&self) -> Uuid {
-        self.0.superblock.uuid
+        self.0.superblock.uuid()
     }
 
     /// Return true if the filesystem has metadata checksums enabled,
@@ -268,7 +268,7 @@ impl Ext4 {
     fn has_metadata_checksums(&self) -> bool {
         self.0
             .superblock
-            .read_only_compatible_features
+            .read_only_compatible_features()
             .contains(ReadOnlyCompatibleFeatures::METADATA_CHECKSUMS)
     }
 

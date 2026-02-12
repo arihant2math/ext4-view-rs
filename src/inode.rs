@@ -199,7 +199,7 @@ impl Inode {
         let mode = InodeMode::from_bits_retain(i_mode);
 
         let mut checksum_base =
-            Checksum::with_seed(ext4.0.superblock.checksum_seed);
+            Checksum::with_seed(ext4.0.superblock.checksum_seed());
         checksum_base.update_u32_le(index.get());
         checksum_base.update_u32_le(i_generation);
 

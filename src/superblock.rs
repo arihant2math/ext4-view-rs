@@ -25,14 +25,14 @@ pub(crate) struct Superblock {
     inode_size: u16,
     inodes_per_block_group: NonZero<u32>,
     block_group_descriptor_size: u16,
-    pub(crate) num_block_groups: u32,
-    pub(crate) incompatible_features: IncompatibleFeatures,
-    pub(crate) read_only_compatible_features: ReadOnlyCompatibleFeatures,
-    pub(crate) checksum_seed: u32,
-    pub(crate) htree_hash_seed: [u32; 4],
-    pub(crate) journal_inode: Option<InodeIndex>,
-    pub(crate) label: Label,
-    pub(crate) uuid: Uuid,
+    num_block_groups: u32,
+    incompatible_features: IncompatibleFeatures,
+    read_only_compatible_features: ReadOnlyCompatibleFeatures,
+    checksum_seed: u32,
+    htree_hash_seed: [u32; 4],
+    journal_inode: Option<InodeIndex>,
+    label: Label,
+    uuid: Uuid,
 }
 
 impl Superblock {
@@ -204,6 +204,40 @@ impl Superblock {
 
     pub(crate) fn block_group_descriptor_size(&self) -> u16 {
         self.block_group_descriptor_size
+    }
+
+    pub(crate) fn num_block_groups(&self) -> u32 {
+        self.num_block_groups
+    }
+
+    pub(crate) fn incompatible_features(&self) -> IncompatibleFeatures {
+        self.incompatible_features
+    }
+
+    pub(crate) fn read_only_compatible_features(
+        &self,
+    ) -> ReadOnlyCompatibleFeatures {
+        self.read_only_compatible_features
+    }
+
+    pub(crate) fn checksum_seed(&self) -> u32 {
+        self.checksum_seed
+    }
+
+    pub(crate) fn htree_hash_seed(&self) -> [u32; 4] {
+        self.htree_hash_seed
+    }
+
+    pub(crate) fn journal_inode(&self) -> Option<InodeIndex> {
+        self.journal_inode
+    }
+
+    pub(crate) fn label(&self) -> &Label {
+        &self.label
+    }
+
+    pub(crate) fn uuid(&self) -> Uuid {
+        self.uuid
     }
 }
 

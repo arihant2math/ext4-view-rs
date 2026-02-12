@@ -40,7 +40,7 @@ impl Journal {
     /// Note: ext4 is all little-endian, except for the journal, which
     /// is all big-endian.
     pub(crate) async fn load(fs: &Ext4) -> Result<Self, Ext4Error> {
-        let Some(journal_inode) = fs.0.superblock.journal_inode else {
+        let Some(journal_inode) = fs.0.superblock.journal_inode() else {
             // Return an empty journal if this filesystem does not have
             // a journal.
             return Ok(Self::empty());

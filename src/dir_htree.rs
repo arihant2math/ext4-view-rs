@@ -311,7 +311,7 @@ async fn find_leaf_node(
     // Get the node structure from the root block.
     let root_node = InternalNode::from_root_block(block, inode.index)?;
 
-    let hash = hash_alg.hash(name, &fs.0.superblock.htree_hash_seed);
+    let hash = hash_alg.hash(name, &fs.0.superblock.htree_hash_seed());
     let mut child_block_relative = root_node
         .lookup_block_by_hash(hash)
         .ok_or(CorruptKind::DirEntry(inode.index))?;
