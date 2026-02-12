@@ -99,6 +99,9 @@ pub enum Ext4Error {
 
     /// The filesystem is read-only.
     Readonly,
+
+    /// No space to perform operation
+    NoSpace
 }
 
 impl Ext4Error {
@@ -138,6 +141,7 @@ impl Display for Ext4Error {
             Self::Incompatible(i) => write!(f, "incompatible filesystem: {i}"),
             Self::Corrupt(c) => write!(f, "corrupt filesystem: {c}"),
             Self::Readonly => write!(f, "filesystem is read-only"),
+            Self::NoSpace => write!(f, "no space left on device"),
         }
     }
 }
@@ -169,6 +173,8 @@ impl From<Ext4Error> for std::io::Error {
             Ext4Error::NotUtf8 => InvalidData.into(),
             Ext4Error::Encrypted => PermissionDenied.into(),
             Ext4Error::Readonly => PermissionDenied.into(),
+            // TODO: Fix
+            Ext4Error::NoSpace => Self::other(e),
         }
     }
 }
