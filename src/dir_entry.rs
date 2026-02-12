@@ -347,7 +347,7 @@ impl DirEntry {
     /// be returned, not the symlink target.
     pub async fn metadata(&self) -> Result<Metadata, Ext4Error> {
         let inode = Inode::read(&self.fs, self.inode).await?;
-        Ok(inode.metadata)
+        Ok(inode.metadata())
     }
 }
 

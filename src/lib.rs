@@ -423,7 +423,7 @@ impl Ext4 {
         inode: &Inode,
     ) -> Result<Vec<u8>, Ext4Error> {
         // Get the file size and initialize the output vector.
-        let file_size_in_bytes = usize::try_from(inode.metadata.size_in_bytes)
+        let file_size_in_bytes = usize::try_from(inode.metadata().size_in_bytes)
             .map_err(|_| Ext4Error::FileTooLarge)?;
         let mut dst = vec![0; file_size_in_bytes];
 
@@ -518,10 +518,10 @@ impl Ext4 {
         ) -> Result<Vec<u8>, Ext4Error> {
             let inode = fs.path_to_inode(path, FollowSymlinks::All).await?;
 
-            if inode.metadata.is_dir() {
+            if inode.metadata().is_dir() {
                 return Err(Ext4Error::IsADirectory);
             }
-            if !inode.metadata.file_type.is_regular_file() {
+            if !inode.metadata().file_type.is_regular_file() {
                 return Err(Ext4Error::IsASpecialFile);
             }
 
@@ -612,7 +612,7 @@ impl Ext4 {
         ) -> Result<ReadDir, Ext4Error> {
             let inode = fs.path_to_inode(path, FollowSymlinks::All).await?;
 
-            if !inode.metadata.is_dir() {
+            if !inode.metadata().is_dir() {
                 return Err(Ext4Error::NotADirectory);
             }
 
@@ -670,7 +670,7 @@ impl Ext4 {
             path: Path<'_>,
         ) -> Result<Metadata, Ext4Error> {
             let inode = fs.path_to_inode(path, FollowSymlinks::All).await?;
-            Ok(inode.metadata)
+            Ok(inode.metadata())
         }
 
         inner(self, path.try_into().map_err(|_| Ext4Error::MalformedPath)?)
@@ -706,7 +706,7 @@ impl Ext4 {
             let inode = fs
                 .path_to_inode(path, FollowSymlinks::ExcludeFinalComponent)
                 .await?;
-            Ok(inode.metadata)
+            Ok(inode.metadata())
         }
 
         inner(self, path.try_into().map_err(|_| Ext4Error::MalformedPath)?)

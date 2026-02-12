@@ -114,7 +114,7 @@ pub struct Inode {
     inline_data: [u8; Self::INLINE_DATA_LEN],
 
     /// Metadata about the file.
-    pub metadata: Metadata,
+    metadata: Metadata,
 
     /// Full inode data as read from disk.
     inode_data: Vec<u8>,
@@ -421,6 +421,17 @@ impl Inode {
 
     pub(crate) fn inline_data(&self) -> [u8; Self::INLINE_DATA_LEN] {
         self.inline_data
+    }
+
+    /// Get the inode's metadata.
+    pub fn metadata(&self) -> Metadata {
+        self.metadata
+    }
+
+    /// Set the inode's metadata. This does not write the changes to disk;
+    /// call [`Self::write()`] to do that.
+    pub fn set_metadata(&mut self, metadata: Metadata) {
+        self.metadata = metadata;
     }
 
     pub(crate) fn checksum_base(&self) -> &Checksum {
