@@ -316,6 +316,24 @@ impl DirEntry {
         Ok((Some(entry), rec_len))
     }
 
+    /// Create a new `DirEntry` for insertion.
+    pub(crate) fn new_for_write(
+        fs: Ext4,
+        inode: InodeIndex,
+        name: DirEntryName<'_>,
+        file_type: FileType,
+    ) -> Result<Self, Ext4Error> {
+        Ok(Self {
+            fs,
+            inode,
+            name: DirEntryNameBuf::try_from(name.as_ref())
+                .map_err(|e| CorruptKind::DirEntryInvalidName(inode, e))?,
+            // Path is irrelevant for on-disk placement; keep empty.
+            path: Arc::new(PathBuf::empty()),
+            file_type,
+        })
+    }
+
     /// Get the directory entry's name.
     #[must_use]
     #[inline]

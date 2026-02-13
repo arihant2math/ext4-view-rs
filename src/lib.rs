@@ -107,6 +107,7 @@
 #![warn(unreachable_pub)]
 
 extern crate alloc;
+extern crate core;
 
 mod bitmap;
 mod block_group;

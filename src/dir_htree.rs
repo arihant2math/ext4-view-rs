@@ -18,11 +18,219 @@ use crate::iters::AsyncIterator;
 use crate::iters::extents::Extents;
 use crate::iters::file_blocks::FileBlocks;
 use crate::path::PathBuf;
-use crate::util::{read_u16le, read_u32le, usize_from_u32};
+use crate::util::{read_u16le, read_u32le, usize_from_u32, write_u16le, write_u32le};
 use alloc::sync::Arc;
 use alloc::vec;
 
 type DirHash = u32;
+
+fn file_type_to_dir_entry_val(ft: crate::file_type::FileType) -> u8 {
+    match ft {
+        crate::file_type::FileType::Regular => 1,
+        crate::file_type::FileType::Directory => 2,
+        crate::file_type::FileType::CharacterDevice => 3,
+        crate::file_type::FileType::BlockDevice => 4,
+        crate::file_type::FileType::Fifo => 5,
+        crate::file_type::FileType::Socket => 6,
+        crate::file_type::FileType::Symlink => 7,
+    }
+}
+
+/// Round `n` up to a multiple of 4.
+fn round_up_4(n: usize) -> Option<usize> {
+    n.checked_add(3)?.checked_div(4)?.checked_mul(4)
+}
+
+/// Minimum on-disk dirent size for a name of length `name_len`.
+fn min_dirent_size(name_len: usize) -> Option<usize> {
+    // ext4_dir_entry_2 has an 8-byte header, then name bytes, padded to 4.
+    round_up_4(8usize.checked_add(name_len)?)
+}
+
+/// Get the "used" size within an existing directory entry record at `offset`.
+fn used_size_for_existing_dirent(
+    inode: InodeIndex,
+    block: &[u8],
+    offset: usize,
+) -> Result<usize, Ext4Error> {
+    // name_len lives at offset+6 in ext4_dir_entry_2.
+    let name_len_off = offset
+        .checked_add(6)
+        .ok_or(CorruptKind::DirEntry(inode))?;
+    let name_len = *block
+        .get(name_len_off)
+        .ok_or(CorruptKind::DirEntry(inode))?;
+
+    min_dirent_size(usize::from(name_len))
+        .ok_or(CorruptKind::DirEntry(inode).into())
+}
+
+/// Write a directory entry into `dst` using `rec_len` for the on-disk record length.
+fn write_dirent(dst: &mut [u8], entry: &DirEntry, rec_len: u16) -> Result<(), Ext4Error> {
+    // inode (u32)
+    write_u32le(dst, 0, entry.inode.get());
+    // rec_len (u16)
+    write_u16le(dst, 4, rec_len);
+
+    // Avoid borrowing from a temporary returned by `file_name()`.
+    let name = entry.file_name();
+    let name_bytes = name.as_ref();
+
+    let name_len: u8 = name_bytes
+        .len()
+        .try_into()
+        .map_err(|_| CorruptKind::DirEntry(entry.inode))?;
+    dst[6] = name_len;
+    dst[7] = file_type_to_dir_entry_val(entry.file_type()?);
+
+    let name_start = 8usize;
+    let name_end = name_start
+        .checked_add(name_bytes.len())
+        .ok_or(Ext4Error::NoSpace)?;
+    dst.get_mut(name_start..name_end)
+        .ok_or(Ext4Error::NoSpace)?
+        .copy_from_slice(name_bytes);
+
+    // Zero remaining bytes in record so checksum is deterministic.
+    let rec_len_usize = usize::from(rec_len);
+    if name_end < rec_len_usize {
+        dst.get_mut(name_end..rec_len_usize)
+            .ok_or(Ext4Error::NoSpace)?
+            .fill(0);
+    }
+    Ok(())
+}
+
+/// Traverse the htree like `find_leaf_node`, but also return the absolute FS block index
+/// of the leaf that was read.
+async fn find_leaf_node_with_block_index(
+    fs: &Ext4,
+    inode: &Inode,
+    name: DirEntryName<'_>,
+    block: &mut [u8],
+) -> Result<FsBlockIndex, Ext4Error> {
+    let hash_alg = HashAlg::from_u8(block[0x1c])?;
+    let depth = block[0x1e];
+    let root_node = InternalNode::from_root_block(block, inode.index)?;
+
+    let hash = hash_alg.hash(name, &fs.0.superblock.htree_hash_seed());
+    let mut child_block_relative = root_node
+        .lookup_block_by_hash(hash)
+        .ok_or(CorruptKind::DirEntry(inode.index))?;
+
+    let mut last_abs_block: Option<FsBlockIndex> = None;
+
+    for level in 0..=depth {
+        let block_index = block_from_file_block(fs, inode, child_block_relative).await?;
+        let dir_block = DirBlock {
+            fs,
+            dir_inode: inode.index,
+            block_index,
+            is_first: false,
+            has_htree: true,
+            checksum_base: inode.checksum_base().clone(),
+        };
+        dir_block.read(block).await?;
+        last_abs_block = Some(block_index);
+
+        if level != depth {
+            let inner_node = InternalNode::from_non_root_block(block, inode.index)?;
+            child_block_relative = inner_node
+                .lookup_block_by_hash(hash)
+                .ok_or(CorruptKind::DirEntry(inode.index))?;
+        }
+    }
+
+    last_abs_block.ok_or_else(|| CorruptKind::DirEntry(inode.index).into())
+}
+
+/// Try to insert `entry` into `leaf_block` in-place.
+///
+/// Returns Ok(true) if inserted, Ok(false) if no space without splitting/allocation.
+fn try_insert_into_leaf_block(
+    fs: &Ext4,
+    dir_inode: &Inode,
+    leaf_block: &mut [u8],
+    entry: &DirEntry,
+) -> Result<bool, Ext4Error> {
+    let new_name = entry.file_name();
+
+    let effective_len = if fs.has_metadata_checksums() {
+        leaf_block
+            .len()
+            .checked_sub(12)
+            .ok_or(CorruptKind::DirEntry(dir_inode.index))?
+    } else {
+        leaf_block.len()
+    };
+
+    let new_min = min_dirent_size(new_name.as_ref().len())
+        .ok_or(CorruptKind::DirEntry(dir_inode.index))?;
+
+    let mut offset = 0usize;
+    let base_path = Arc::new(PathBuf::empty());
+
+    while offset < effective_len {
+        let (parsed, rec_len_nz) = DirEntry::from_bytes(
+            fs.clone(),
+            &leaf_block[offset..effective_len],
+            dir_inode.index,
+            base_path.clone(),
+        )?;
+        let rec_len = rec_len_nz.get();
+
+        if offset
+            .checked_add(rec_len)
+            .ok_or(CorruptKind::DirEntry(dir_inode.index))?
+            > effective_len
+        {
+            return Err(CorruptKind::DirEntry(dir_inode.index).into());
+        }
+
+        if let Some(existing) = parsed {
+            if existing.file_name() == new_name {
+                // Entry already exists.
+                return Err(Ext4Error::NoSpace);
+            }
+
+            let used = used_size_for_existing_dirent(dir_inode.index, leaf_block, offset)
+                .map_err(|_| CorruptKind::DirEntry(dir_inode.index))?;
+
+            if rec_len >= used {
+                let slack = rec_len - used;
+                if slack >= new_min {
+                    // Split: shrink existing record and place new entry in the tail.
+                    write_u16le(
+                        leaf_block,
+                        offset + 4,
+                        u16::try_from(used)
+                            .map_err(|_| CorruptKind::DirEntry(dir_inode.index))?,
+                    );
+
+                    let new_off = offset
+                        .checked_add(used)
+                        .ok_or(CorruptKind::DirEntry(dir_inode.index))?;
+                    let new_rec_len = rec_len - used;
+                    let new_rec_len_u16: u16 = new_rec_len
+                        .try_into()
+                        .map_err(|_| CorruptKind::DirEntry(dir_inode.index))?;
+
+                    let end = new_off
+                        .checked_add(new_rec_len)
+                        .ok_or(CorruptKind::DirEntry(dir_inode.index))?;
+                    write_dirent(&mut leaf_block[new_off..end], entry, new_rec_len_u16)?;
+                    return Ok(true);
+                }
+            }
+        }
+
+        offset = offset
+            .checked_add(rec_len)
+            .ok_or(CorruptKind::DirEntry(dir_inode.index))?;
+    }
+
+    Ok(false)
+}
 
 // Internal node of an htree.
 //
@@ -38,7 +246,7 @@ type DirHash = u32;
 // * count (u16): the actual number of entries (including the header
 //   entry).
 // * zero_block (u32): the child block index to use when looking up
-//   hashes that compare less-than the first "normal" entry's hash key.
+//   hashes that compare less-than-the-first "normal" entry's hash key.
 //
 // The remaining entries each contain two fields:
 // * hash: the minimum hash for this block. All directory entries in
@@ -368,8 +576,8 @@ pub(crate) async fn get_dir_entry_via_htree(
     let block_size = fs.0.superblock.block_size();
     let mut block = vec![0; block_size.to_usize()];
 
-    // Read the first block of the file, which contains the root node of
-    // the htree.
+    // Read the first block of the file, which contains the root node of the
+    // htree.
     read_root_block(fs, inode, &mut block).await?;
 
     // Handle "." and ".." entries.
@@ -407,6 +615,60 @@ pub(crate) async fn get_dir_entry_via_htree(
     }
 
     Err(Ext4Error::NotFound)
+}
+
+/// Add a directory entry to a htree.
+pub(crate) async fn add_dir_entry_via_htree(
+    fs: &Ext4,
+    inode: &Inode,
+    entry: &DirEntry,
+) -> Result<(), Ext4Error> {
+    assert!(inode.flags().contains(InodeFlags::DIRECTORY_HTREE));
+
+    if inode.flags().contains(InodeFlags::DIRECTORY_ENCRYPTED) {
+        return Err(Ext4Error::Encrypted);
+    }
+
+    // Can't add these.
+    if entry.file_name() == "." || entry.file_name() == ".." {
+        return Err(CorruptKind::DirEntry(inode.index).into());
+    }
+
+    let block_size = fs.0.superblock.block_size();
+    let mut block = vec![0; block_size.to_usize()];
+
+    // Read root.
+    read_root_block(fs, inode, &mut block).await?;
+
+    // Ensure it doesn't already exist in the fixed slots.
+    if read_dot_or_dotdot(fs.clone(), inode, entry.file_name(), &block)?.is_some() {
+        return Err(Ext4Error::NoSpace);
+    }
+
+    // Find leaf and its filesystem block index.
+    let leaf_block_index = find_leaf_node_with_block_index(fs, inode, entry.file_name(), &mut block).await?;
+
+    let inserted = try_insert_into_leaf_block(fs, inode, &mut block, entry)?;
+    if !inserted {
+        // Would need to split leaf/allocate block.
+        return Err(Ext4Error::NoSpace);
+    }
+
+    // Update checksum tail if needed.
+    if fs.has_metadata_checksums() {
+        // Mirror DirBlock::calc_leaf_checksum logic here.
+        let write_off = block.len() - 4;
+        let tail_entry_size = 12usize;
+        let tail_entry_offset = block.len().checked_sub(tail_entry_size).unwrap();
+        let mut checksum = inode.checksum_base().clone();
+        checksum.update(&block[..tail_entry_offset]);
+        let csum = checksum.finalize();
+        write_u32le(&mut block, write_off, csum);
+    }
+
+    // Write back entire block.
+    fs.write_to_block(leaf_block_index, 0, &block).await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -707,5 +969,117 @@ mod tests {
 
         // Invalid block.
         assert!(block_from_file_block(&fs, &inode, 70).await.is_err());
+    }
+
+    #[cfg(feature = "std")]
+    #[tokio::test]
+    async fn test_add_dir_entry_via_htree_success_and_persists() {
+        // Use shared rw so we can verify the write via subsequent reads.
+        let fs = crate::test_util::load_fs_shared_rw("test_disk1.bin.zst").await;
+
+        // Pick a known htree directory from the test image.
+        let dir_inode = fs
+            .path_to_inode(Path::new("/big_dir"), FollowSymlinks::All)
+            .await
+            .unwrap();
+        assert!(dir_inode.flags().contains(InodeFlags::DIRECTORY_HTREE));
+
+        let name: DirEntryName<'_> = "added_entry".try_into().unwrap();
+        assert!(get_dir_entry_via_htree(&fs, &dir_inode, name).await.is_err());
+
+        // Use the inode of an existing regular file as the target.
+        let target_inode = fs
+            .path_to_inode(Path::new("/small_file"), FollowSymlinks::All)
+            .await
+            .unwrap();
+
+        // Find any existing entry (non-dot) to use as a template for file_type.
+        let base_path = PathBuf::from(Path::new("/big_dir"));
+        let mut iter = ReadDir::new(fs.clone(), &dir_inode, base_path).unwrap();
+        let mut template_file_type = None;
+        while let Some(e) = iter.next().await {
+            let e = e.unwrap();
+            if e.file_name() != "." && e.file_name() != ".." {
+                template_file_type = Some(e.file_type().unwrap());
+                break;
+            }
+        }
+        let file_type = template_file_type.expect("/big_dir should have entries");
+
+        let new_entry =
+            DirEntry::new_for_write(fs.clone(), target_inode.index, name, file_type)
+                .unwrap();
+
+        add_dir_entry_via_htree(&fs, &dir_inode, &new_entry)
+            .await
+            .unwrap();
+
+        // Verify we can look it up via htree after the write.
+        let found = get_dir_entry_via_htree(&fs, &dir_inode, name).await.unwrap();
+        assert_eq!(found.file_name(), name);
+        assert_eq!(found.inode, target_inode.index);
+
+        // Also verify it's visible via read_dir iteration.
+        let base_path = PathBuf::from(Path::new("/big_dir"));
+        let mut iter = ReadDir::new(fs.clone(), &dir_inode, base_path).unwrap();
+        let mut saw = false;
+        while let Some(e) = iter.next().await {
+            let e = e.unwrap();
+            if e.file_name() == name {
+                saw = true;
+                assert_eq!(e.inode, target_inode.index);
+                break;
+            }
+        }
+        assert!(saw);
+    }
+
+    #[cfg(feature = "std")]
+    #[tokio::test]
+    async fn test_add_dir_entry_via_htree_no_space_without_allocation() {
+        let fs = crate::test_util::load_fs_shared_rw("test_disk1.bin.zst").await;
+
+        let dir_inode = fs
+            .path_to_inode(Path::new("/big_dir"), FollowSymlinks::All)
+            .await
+            .unwrap();
+        assert!(dir_inode.flags().contains(InodeFlags::DIRECTORY_HTREE));
+
+        // Force an insertion that almost certainly can't fit in existing slack: name length 255.
+        // This should require allocating/splitting, which this implementation must reject.
+        let long_name_bytes = vec![b'a'; 255];
+        let long_name: DirEntryName<'_> =
+            DirEntryName::try_from(long_name_bytes.as_slice()).unwrap();
+
+        let target_inode = fs
+            .path_to_inode(Path::new("/small_file"), FollowSymlinks::All)
+            .await
+            .unwrap();
+
+        // Find any existing entry (non-dot) to use as a template for file_type.
+        let base_path = PathBuf::from(Path::new("/big_dir"));
+        let mut iter = ReadDir::new(fs.clone(), &dir_inode, base_path).unwrap();
+        let mut template_file_type = None;
+        while let Some(e) = iter.next().await {
+            let e = e.unwrap();
+            if e.file_name() != "." && e.file_name() != ".." {
+                template_file_type = Some(e.file_type().unwrap());
+                break;
+            }
+        }
+        let file_type = template_file_type.expect("/big_dir should have entries");
+
+        let new_entry = DirEntry::new_for_write(
+            fs.clone(),
+            target_inode.index,
+            long_name,
+            file_type,
+        )
+        .unwrap();
+
+        let err = add_dir_entry_via_htree(&fs, &dir_inode, &new_entry)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Ext4Error::NoSpace));
     }
 }
