@@ -8,7 +8,7 @@ pub(crate) struct BitmapHandle {
     block: FsBlockIndex,
 }
 
-#[expect(unused)]
+#[allow(unused)]
 impl BitmapHandle {
     pub(crate) fn new(block: FsBlockIndex) -> Self {
         Self { block }
@@ -94,5 +94,22 @@ impl BitmapHandle {
             Checksum::with_seed(ext4.0.superblock.checksum_seed());
         checksum.update(&dst);
         Ok(checksum.finalize())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(feature = "std")]
+    #[tokio::test]
+    async fn test_bitmap_handle() {
+        let fs = crate::test_util::load_test_disk1().await;
+
+        let bitmap = fs.get_block_bitmap_handle(0);
+        let first = bitmap.find_first(false, &fs).await.unwrap();
+        // Ensure false
+        assert_eq!(bitmap.query(first.unwrap(), &fs).await.unwrap(), false);
+        let first = bitmap.find_first(true, &fs).await.unwrap();
+        // Ensure true
+        assert_eq!(bitmap.query(first.unwrap(), &fs).await.unwrap(), true);
     }
 }
