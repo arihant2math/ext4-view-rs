@@ -597,113 +597,115 @@ mod tests {
     }
 
     // TODO: Debug
-    // #[cfg(feature = "std")]
-    // #[tokio::test]
-    // async fn test_get_dir_entry_via_htree() {
-    //     let fs = crate::test_util::load_test_disk1().await;
-    //
-    //     // Resolve paths in `/medium_dir` via htree.
-    //     let medium_dir = Path::new("/medium_dir");
-    //     assert_eq!(compare_all_entries(&fs, medium_dir).await, 1_002);
-    //
-    //     // Resolve paths in `/big_dir` via htree.
-    //     let big_dir = Path::new("/big_dir");
-    //     assert_eq!(compare_all_entries(&fs, big_dir).await, 10_002);
-    // }
+    #[cfg(feature = "std")]
+    #[tokio::test]
+    #[ignore]
+    async fn test_get_dir_entry_via_htree() {
+        let fs = crate::test_util::load_test_disk1().await;
+
+        // Resolve paths in `/medium_dir` via htree.
+        let medium_dir = Path::new("/medium_dir");
+        assert_eq!(compare_all_entries(&fs, medium_dir).await, 1_002);
+
+        // Resolve paths in `/big_dir` via htree.
+        let big_dir = Path::new("/big_dir");
+        assert_eq!(compare_all_entries(&fs, big_dir).await, 10_002);
+    }
 
     // TODO: Debug
-    // /// Test `block_from_file_block` with a file that uses extents.
-    // #[cfg(feature = "std")]
-    // #[tokio::test]
-    // async fn test_block_from_file_block() {
-    //     let fs = crate::test_util::load_test_disk1().await;
-    //
-    //     // Manually construct a simple extent tree containing two
-    //     // extents.
-    //     //
-    //     // The test disk has experienced relatively few operations
-    //     // compared to a real-world filesystem, so it doesn't have much
-    //     // fragmentation. In particular, all of its directory tree
-    //     // inodes currently have a single extent with a relative offset
-    //     // of 0, which doesn't fully exercise
-    //     // `block_from_file_block`. Create some slightly more
-    //     // interesting extents to test here.
-    //     let mut extents = Vec::new();
-    //     // Node header:
-    //     // Magic:
-    //     extents.extend(&0xf30au16.to_le_bytes());
-    //     // Num entries:
-    //     extents.extend(&2u16.to_le_bytes());
-    //     // Max entries:
-    //     extents.extend(&2u16.to_le_bytes());
-    //     // Depth (leaf):
-    //     extents.extend(&0u16.to_le_bytes());
-    //     // Padding:
-    //     extents.extend(&0u32.to_le_bytes());
-    //     // Extent 0:
-    //     // Relative start block:
-    //     extents.extend(&0u32.to_le_bytes());
-    //     // Num blocks:
-    //     extents.extend(&23u16.to_le_bytes());
-    //     // Absolute start block (hi, lo):
-    //     extents.extend(0u16.to_le_bytes());
-    //     extents.extend(2543u32.to_le_bytes());
-    //     // Extent 1:
-    //     // Relative start block:
-    //     extents.extend(&23u32.to_le_bytes());
-    //     // Num blocks:
-    //     extents.extend(&47u16.to_le_bytes());
-    //     // Absolute start block (hi, lo):
-    //     extents.extend(0u16.to_le_bytes());
-    //     extents.extend(11u32.to_le_bytes());
-    //
-    //     extents.resize(60usize, 0u8);
-    //
-    //     // Grab a convenient inode and overwrite its inline data with
-    //     // the new extent tree.
-    //     let inode = fs
-    //         .path_to_inode(
-    //             "/medium_dir".try_into().unwrap(),
-    //             FollowSymlinks::All,
-    //         )
-    //         .await
-    //         .unwrap();
-    //     inode.inline_data().copy_from_slice(&extents);
-    //
-    //     // Verify the extents.
-    //     let extents: Vec<_> = Extents::new(fs.clone(), &inode)
-    //         .unwrap()
-    //         .map(|e| e.unwrap())
-    //         .await
-    //         .collect()
-    //         .await;
-    //     assert_eq!(
-    //         extents,
-    //         [
-    //             Extent {
-    //                 start_block: 2543,
-    //                 num_blocks: 23,
-    //                 block_within_file: 0,
-    //             },
-    //             Extent {
-    //                 start_block: 11,
-    //                 num_blocks: 47,
-    //                 block_within_file: 23,
-    //             }
-    //         ]
-    //     );
-    //
-    //     // Blocks in extent 0.
-    //     assert_eq!(block_from_file_block(&fs, &inode, 0).await.unwrap(), 2543);
-    //     assert_eq!(block_from_file_block(&fs, &inode, 1).await.unwrap(), 2544);
-    //     assert_eq!(block_from_file_block(&fs, &inode, 22).await.unwrap(), 2565);
-    //
-    //     // Blocks in extent 1.
-    //     assert_eq!(block_from_file_block(&fs, &inode, 23).await.unwrap(), 11);
-    //     assert_eq!(block_from_file_block(&fs, &inode, 24).await.unwrap(), 12);
-    //     assert_eq!(block_from_file_block(&fs, &inode, 69).await.unwrap(), 57);
-    //
-    //     // Invalid block.
-    //     assert!(block_from_file_block(&fs, &inode, 70).await.is_err());
-    // }
+    /// Test `block_from_file_block` with a file that uses extents.
+    #[cfg(feature = "std")]
+    #[tokio::test]
+    #[ignore]
+    async fn test_block_from_file_block() {
+        let fs = crate::test_util::load_test_disk1().await;
+
+        // Manually construct a simple extent tree containing two
+        // extents.
+        //
+        // The test disk has experienced relatively few operations
+        // compared to a real-world filesystem, so it doesn't have much
+        // fragmentation. In particular, all of its directory tree
+        // inodes currently have a single extent with a relative offset
+        // of 0, which doesn't fully exercise
+        // `block_from_file_block`. Create some slightly more
+        // interesting extents to test here.
+        let mut extents = Vec::new();
+        // Node header:
+        // Magic:
+        extents.extend(&0xf30au16.to_le_bytes());
+        // Num entries:
+        extents.extend(&2u16.to_le_bytes());
+        // Max entries:
+        extents.extend(&2u16.to_le_bytes());
+        // Depth (leaf):
+        extents.extend(&0u16.to_le_bytes());
+        // Padding:
+        extents.extend(&0u32.to_le_bytes());
+        // Extent 0:
+        // Relative start block:
+        extents.extend(&0u32.to_le_bytes());
+        // Num blocks:
+        extents.extend(&23u16.to_le_bytes());
+        // Absolute start block (hi, lo):
+        extents.extend(0u16.to_le_bytes());
+        extents.extend(2543u32.to_le_bytes());
+        // Extent 1:
+        // Relative start block:
+        extents.extend(&23u32.to_le_bytes());
+        // Num blocks:
+        extents.extend(&47u16.to_le_bytes());
+        // Absolute start block (hi, lo):
+        extents.extend(0u16.to_le_bytes());
+        extents.extend(11u32.to_le_bytes());
+
+        extents.resize(60usize, 0u8);
+
+        // Grab a convenient inode and overwrite its inline data with
+        // the new extent tree.
+        let inode = fs
+            .path_to_inode(
+                "/medium_dir".try_into().unwrap(),
+                FollowSymlinks::All,
+            )
+            .await
+            .unwrap();
+        inode.inline_data().copy_from_slice(&extents);
+
+        // Verify the extents.
+        let extents: Vec<_> = Extents::new(fs.clone(), &inode)
+            .unwrap()
+            .map(|e| e.unwrap())
+            .await
+            .collect()
+            .await;
+        assert_eq!(
+            extents,
+            [
+                Extent {
+                    start_block: 2543,
+                    num_blocks: 23,
+                    block_within_file: 0,
+                },
+                Extent {
+                    start_block: 11,
+                    num_blocks: 47,
+                    block_within_file: 23,
+                }
+            ]
+        );
+
+        // Blocks in extent 0.
+        assert_eq!(block_from_file_block(&fs, &inode, 0).await.unwrap(), 2543);
+        assert_eq!(block_from_file_block(&fs, &inode, 1).await.unwrap(), 2544);
+        assert_eq!(block_from_file_block(&fs, &inode, 22).await.unwrap(), 2565);
+
+        // Blocks in extent 1.
+        assert_eq!(block_from_file_block(&fs, &inode, 23).await.unwrap(), 11);
+        assert_eq!(block_from_file_block(&fs, &inode, 24).await.unwrap(), 12);
+        assert_eq!(block_from_file_block(&fs, &inode, 69).await.unwrap(), 57);
+
+        // Invalid block.
+        assert!(block_from_file_block(&fs, &inode, 70).await.is_err());
+    }
 }
