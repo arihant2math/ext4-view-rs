@@ -424,6 +424,9 @@ impl Ext4 {
         let checksum = bitmap_handle.calc_checksum(self).await?;
         self.0.block_group_descriptors[usize_from_u32(block_group_index)]
             .set_block_bitmap_checksum(checksum);
+        self.0.block_group_descriptors[usize_from_u32(block_group_index)]
+            .write(self)
+            .await?;
         Ok(())
     }
 

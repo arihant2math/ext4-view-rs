@@ -448,7 +448,7 @@ impl BlockGroupDescriptor {
         Ok(block_group_descriptor)
     }
 
-    pub(crate) async fn write(&mut self, ext4: &Ext4) -> Result<(), Ext4Error> {
+    pub(crate) async fn write(&self, ext4: &Ext4) -> Result<(), Ext4Error> {
         let start = Self::get_start_byte(&ext4.0.superblock, self.index)
             .ok_or(CorruptKind::BlockGroupDescriptor(self.index))?;
         self.update_checksum(&ext4.0.superblock);
