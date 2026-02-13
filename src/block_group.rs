@@ -358,7 +358,7 @@ impl BlockGroupDescriptor {
         (&self.block_bitmap_checksum).into()
     }
 
-    pub(crate) fn set_block_bitmap_checksum(&mut self, checksum: u32) {
+    pub(crate) fn set_block_bitmap_checksum(&self, checksum: u32) {
         self.block_bitmap_checksum.update(checksum);
     }
 
@@ -366,7 +366,7 @@ impl BlockGroupDescriptor {
         (&self.inode_bitmap_checksum).into()
     }
 
-    pub(crate) fn set_inode_bitmap_checksum(&mut self, checksum: u32) {
+    pub(crate) fn set_inode_bitmap_checksum(&self, checksum: u32) {
         self.inode_bitmap_checksum.update(checksum);
     }
 

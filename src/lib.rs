@@ -418,12 +418,12 @@ impl Ext4 {
 
     async fn update_block_bitmap_checksum(
         &self,
-        _block_group_index: u32,
-        _bitmap_handle: BitmapHandle,
+        block_group_index: u32,
+        bitmap_handle: BitmapHandle,
     ) -> Result<(), Ext4Error> {
-        // let checksum = bitmap_handle.calc_checksum(self).await?;
-        // self.0.block_group_descriptors[usize_from_u32(block_group_index)]
-        // .set_block_bitmap_checksum(&self.0.superblock, checksum);
+        let checksum = bitmap_handle.calc_checksum(self).await?;
+        self.0.block_group_descriptors[usize_from_u32(block_group_index)]
+            .set_block_bitmap_checksum(checksum);
         Ok(())
     }
 
