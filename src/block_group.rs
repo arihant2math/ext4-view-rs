@@ -13,18 +13,17 @@ use crate::features::{IncompatibleFeatures, ReadOnlyCompatibleFeatures};
 use crate::superblock::Superblock;
 use crate::util::{
     read_u16le, read_u32le, u32_from_hilo, u32_to_hilo, u64_from_hilo,
-    usize_from_u32, write_u16le,
+    u64_to_hilo, usize_from_u32, write_u16le, write_u32le,
 };
 use crate::{Ext4, Ext4Read};
 use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::Deref;
-use core::ops::DerefMut;
+use core::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, Ordering};
 
 pub(crate) type BlockGroupIndex = u32;
 
-#[derive(Copy, Clone, Debug)]
-enum BlockGroupDescriptorBytes {
+pub(crate) enum BlockGroupDescriptorBytes {
     OnDisk32([u8; BlockGroupDescriptor::SIZE_IN_BYTES_ON_DISK_32]),
     OnDisk64([u8; BlockGroupDescriptor::SIZE_IN_BYTES_ON_DISK_64]),
 }
@@ -40,25 +39,60 @@ impl Deref for BlockGroupDescriptorBytes {
     }
 }
 
-impl DerefMut for BlockGroupDescriptorBytes {
-    fn deref_mut(&mut self) -> &mut [u8] {
-        match self {
-            BlockGroupDescriptorBytes::OnDisk32(bytes) => bytes,
-            BlockGroupDescriptorBytes::OnDisk64(bytes) => bytes,
-        }
-    }
-}
-
 #[expect(unused)]
 pub(crate) enum TruncatedChecksum {
     Truncated(u16),
     Full(u32),
 }
 
+impl From<&AtomicTruncatedChecksum> for TruncatedChecksum {
+    fn from(atomic: &AtomicTruncatedChecksum) -> Self {
+        match atomic {
+            AtomicTruncatedChecksum::Truncated(c) => {
+                Self::Truncated(c.load(Ordering::Relaxed))
+            }
+            AtomicTruncatedChecksum::Full(c) => {
+                Self::Full(c.load(Ordering::Relaxed))
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum AtomicTruncatedChecksum {
+    Truncated(AtomicU16),
+    Full(AtomicU32),
+}
+
+impl AtomicTruncatedChecksum {
+    fn update(&self, checksum: u32) {
+        match self {
+            AtomicTruncatedChecksum::Truncated(c) => {
+                c.store(checksum as u16, Ordering::Relaxed)
+            }
+            AtomicTruncatedChecksum::Full(c) => {
+                c.store(checksum, Ordering::Relaxed)
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct BlockGroupDescriptor {
     index: BlockGroupIndex,
-    bytes: BlockGroupDescriptorBytes,
+    is_64bit: bool,
+    block_bitmap: AtomicU64,
+    inode_bitmap: AtomicU64,
+    inode_table_first_block: AtomicU64,
+    free_blocks_count: AtomicU32,
+    free_inodes_count: AtomicU32,
+    used_dirs_count: AtomicU32,
+    flags: AtomicU16,
+    exclude_bitmap: AtomicU64,
+    block_bitmap_checksum: AtomicTruncatedChecksum,
+    inode_bitmap_checksum: AtomicTruncatedChecksum,
+    unused_inodes_count: AtomicU32,
+    checksum: AtomicU16,
 }
 
 #[expect(dead_code)]
@@ -76,45 +110,198 @@ impl BlockGroupDescriptor {
         index: BlockGroupIndex,
         bytes: &[u8],
     ) -> Self {
-        if superblock
+        let is_64_bit = superblock
             .incompatible_features()
-            .contains(IncompatibleFeatures::IS_64BIT)
-        {
-            assert_eq!(bytes.len(), Self::SIZE_IN_BYTES_ON_DISK_64);
-            Self {
-                index,
-                bytes: BlockGroupDescriptorBytes::OnDisk64(
-                    bytes[..Self::SIZE_IN_BYTES_ON_DISK_64].try_into().unwrap(),
-                ),
-            }
+            .contains(IncompatibleFeatures::IS_64BIT);
+        let block_bitmap = u64_from_hilo(
+            if is_64_bit {
+                read_u32le(bytes, 0x20)
+            } else {
+                0
+            },
+            read_u32le(bytes, 0x0),
+        );
+        let inode_bitmap = u64_from_hilo(
+            if is_64_bit {
+                read_u32le(bytes, 0x24)
+            } else {
+                0
+            },
+            read_u32le(bytes, 0x4),
+        );
+        let inode_table_first_block = u64_from_hilo(
+            if is_64_bit {
+                read_u32le(bytes, 0x28)
+            } else {
+                0
+            },
+            read_u32le(bytes, 0x8),
+        );
+        let free_blocks_count = u32_from_hilo(
+            if is_64_bit {
+                read_u16le(bytes, 0x2C)
+            } else {
+                0
+            },
+            read_u16le(bytes, 0xC),
+        );
+        let free_inodes_count = u32_from_hilo(
+            if is_64_bit {
+                read_u16le(bytes, 0x2E)
+            } else {
+                0
+            },
+            read_u16le(bytes, 0xE),
+        );
+        let used_dirs_count = u32_from_hilo(
+            if is_64_bit {
+                read_u16le(bytes, 0x30)
+            } else {
+                0
+            },
+            read_u16le(bytes, 0x10),
+        );
+        let flags = read_u16le(bytes, 0x12);
+        let exclude_bitmap = u64_from_hilo(
+            if is_64_bit {
+                read_u32le(bytes, 0x34)
+            } else {
+                0
+            },
+            read_u32le(bytes, 0x14),
+        );
+        let block_bitmap_checksum = if is_64_bit {
+            AtomicTruncatedChecksum::Full(AtomicU32::new(u32_from_hilo(
+                read_u16le(bytes, 0x38),
+                read_u16le(bytes, 0x18),
+            )))
         } else {
-            assert_eq!(bytes.len(), Self::SIZE_IN_BYTES_ON_DISK_32);
-            Self {
-                index,
-                bytes: BlockGroupDescriptorBytes::OnDisk32(
-                    bytes[..Self::SIZE_IN_BYTES_ON_DISK_32].try_into().unwrap(),
-                ),
-            }
+            AtomicTruncatedChecksum::Truncated(AtomicU16::new(read_u16le(
+                bytes, 0x18,
+            )))
+        };
+        let inode_bitmap_checksum = if is_64_bit {
+            AtomicTruncatedChecksum::Full(AtomicU32::new(u32_from_hilo(
+                read_u16le(bytes, 0x3A),
+                read_u16le(bytes, 0x1A),
+            )))
+        } else {
+            AtomicTruncatedChecksum::Truncated(AtomicU16::new(read_u16le(
+                bytes, 0x1A,
+            )))
+        };
+        let unused_inodes_count = u32_from_hilo(
+            if is_64_bit {
+                read_u16le(bytes, 0x3C)
+            } else {
+                0
+            },
+            read_u16le(bytes, 0x1C),
+        );
+        let checksum = read_u16le(bytes, Self::BG_CHECKSUM_OFFSET);
+        Self {
+            index,
+            is_64bit: is_64_bit,
+            block_bitmap: AtomicU64::new(block_bitmap),
+            inode_bitmap: AtomicU64::new(inode_bitmap),
+            inode_table_first_block: AtomicU64::new(inode_table_first_block),
+            free_blocks_count: AtomicU32::new(free_blocks_count),
+            free_inodes_count: AtomicU32::new(free_inodes_count),
+            used_dirs_count: AtomicU32::new(used_dirs_count),
+            flags: AtomicU16::new(flags),
+            exclude_bitmap: AtomicU64::new(exclude_bitmap),
+            block_bitmap_checksum,
+            inode_bitmap_checksum,
+            unused_inodes_count: AtomicU32::new(unused_inodes_count),
+            checksum: AtomicU16::new(checksum),
         }
     }
 
-    fn update_checksum(&mut self, superblock: &Superblock) {
+    fn to_bytes(&self) -> BlockGroupDescriptorBytes {
+        let (block_bitmap_hi, block_bitmap_lo) =
+            u64_to_hilo(self.block_bitmap.load(Ordering::Relaxed));
+        let (inode_bitmap_hi, inode_bitmap_lo) =
+            u64_to_hilo(self.inode_bitmap.load(Ordering::Relaxed));
+        let (inode_table_first_block_hi, inode_table_first_block_lo) =
+            u64_to_hilo(self.inode_table_first_block.load(Ordering::Relaxed));
+        let (free_blocks_count_hi, free_blocks_count_lo) =
+            u32_to_hilo(self.free_blocks_count.load(Ordering::Relaxed));
+        let (free_inodes_count_hi, free_inodes_count_lo) =
+            u32_to_hilo(self.free_inodes_count.load(Ordering::Relaxed));
+        let (used_dirs_count_hi, used_dirs_count_lo) =
+            u32_to_hilo(self.used_dirs_count.load(Ordering::Relaxed));
+        let flags = self.flags.load(Ordering::Relaxed);
+        let (exclude_bitmap_hi, exclude_bitmap_lo) =
+            u64_to_hilo(self.exclude_bitmap.load(Ordering::Relaxed));
+        let (block_bitmap_checksum_hi, block_bitmap_checksum_lo) =
+            u32_to_hilo(match &self.block_bitmap_checksum {
+                AtomicTruncatedChecksum::Truncated(c) => {
+                    c.load(Ordering::Relaxed) as u32
+                }
+                AtomicTruncatedChecksum::Full(c) => c.load(Ordering::Relaxed),
+            });
+        let (inode_bitmap_checksum_hi, inode_bitmap_checksum_lo) =
+            u32_to_hilo(match &self.inode_bitmap_checksum {
+                AtomicTruncatedChecksum::Truncated(c) => {
+                    c.load(Ordering::Relaxed) as u32
+                }
+                AtomicTruncatedChecksum::Full(c) => c.load(Ordering::Relaxed),
+            });
+        let (unused_inodes_count_hi, unused_inodes_count_lo) =
+            u32_to_hilo(self.unused_inodes_count.load(Ordering::Relaxed));
+        let checksum = self.checksum.load(Ordering::Relaxed);
+        let update_32 = |bytes: &mut [u8]| {
+            write_u32le(bytes, 0x0, block_bitmap_lo);
+            write_u32le(bytes, 0x4, inode_bitmap_lo);
+            write_u32le(bytes, 0x8, inode_table_first_block_lo);
+            write_u16le(bytes, 0xC, free_blocks_count_lo);
+            write_u16le(bytes, 0xE, free_inodes_count_lo);
+            write_u16le(bytes, 0x10, used_dirs_count_lo);
+            write_u16le(bytes, 0x12, flags);
+            write_u32le(bytes, 0x14, exclude_bitmap_lo);
+            write_u16le(bytes, 0x18, block_bitmap_checksum_lo);
+            write_u16le(bytes, 0x1A, inode_bitmap_checksum_lo);
+            write_u16le(bytes, 0x1C, unused_inodes_count_lo);
+            write_u16le(bytes, 0x1E, checksum);
+        };
+        if self.is_64bit {
+            let mut bytes = [0; Self::SIZE_IN_BYTES_ON_DISK_64];
+            update_32(&mut bytes);
+            write_u32le(&mut bytes, 0x20, block_bitmap_hi);
+            write_u32le(&mut bytes, 0x24, inode_bitmap_hi);
+            write_u32le(&mut bytes, 0x28, inode_table_first_block_hi);
+            write_u16le(&mut bytes, 0x2C, free_blocks_count_hi);
+            write_u16le(&mut bytes, 0x2E, free_inodes_count_hi);
+            write_u16le(&mut bytes, 0x30, used_dirs_count_hi);
+            write_u32le(&mut bytes, 0x34, exclude_bitmap_hi);
+            write_u16le(&mut bytes, 0x38, block_bitmap_checksum_hi);
+            write_u16le(&mut bytes, 0x3A, inode_bitmap_checksum_hi);
+            write_u16le(&mut bytes, 0x3C, unused_inodes_count_hi);
+            BlockGroupDescriptorBytes::OnDisk64(bytes)
+        } else {
+            let mut bytes = [0; Self::SIZE_IN_BYTES_ON_DISK_32];
+            update_32(&mut bytes);
+            BlockGroupDescriptorBytes::OnDisk32(bytes)
+        }
+    }
+
+    fn update_checksum(&self, superblock: &Superblock) {
         if superblock
             .read_only_compatible_features()
             .contains(ReadOnlyCompatibleFeatures::METADATA_CHECKSUMS)
         {
             let mut checksum = Checksum::with_seed(superblock.checksum_seed());
+            let bytes = self.to_bytes();
             checksum.update_u32_le(self.index);
             // Up to the checksum field.
-            checksum.update(&self.bytes[..Self::BG_CHECKSUM_OFFSET]);
+            checksum.update(&bytes[..Self::BG_CHECKSUM_OFFSET]);
             // Zero'd checksum field.
             checksum.update_u16_le(0);
             // Rest of the block group descriptor.
-            checksum.update(&self.bytes[Self::BG_CHECKSUM_OFFSET + 2..]);
+            checksum.update(&bytes[Self::BG_CHECKSUM_OFFSET + 2..]);
             // Truncate to the lower 16 bits.
             let checksum = u16::try_from(checksum.finalize() & 0xffff).unwrap();
-            self.bytes[Self::BG_CHECKSUM_OFFSET..Self::BG_CHECKSUM_OFFSET + 2]
-                .copy_from_slice(&checksum.to_le_bytes());
+            self.checksum.store(checksum, Ordering::Relaxed);
         } else if superblock
             .read_only_compatible_features()
             .contains(ReadOnlyCompatibleFeatures::GROUP_DESCRIPTOR_CHECKSUMS)
@@ -126,245 +313,65 @@ impl BlockGroupDescriptor {
     }
 
     pub(crate) fn block_bitmap_block(&self) -> FsBlockIndex {
-        const LO_OFFSET: usize = 0x0;
-        const HI_OFFSET: usize = 0x20;
-        let (bg_block_bitmap_hi, bg_block_bitmap_lo) = match self.bytes {
-            BlockGroupDescriptorBytes::OnDisk32(bytes) => {
-                (0, read_u32le(&bytes, LO_OFFSET))
-            }
-            BlockGroupDescriptorBytes::OnDisk64(bytes) => {
-                (read_u32le(&bytes, HI_OFFSET), read_u32le(&bytes, LO_OFFSET))
-            }
-        };
-
-        u64_from_hilo(bg_block_bitmap_hi, bg_block_bitmap_lo)
+        self.block_bitmap
+            .load(Ordering::Relaxed)
             .try_into()
             .unwrap()
     }
 
     pub(crate) fn inode_bitmap_block(&self) -> FsBlockIndex {
-        const LO_OFFSET: usize = 0x4;
-        const HI_OFFSET: usize = 0x24;
-        let (bg_inode_bitmap_hi, bg_inode_bitmap_lo) = match self.bytes {
-            BlockGroupDescriptorBytes::OnDisk32(bytes) => {
-                (0, read_u32le(&bytes, LO_OFFSET))
-            }
-            BlockGroupDescriptorBytes::OnDisk64(bytes) => {
-                (read_u32le(&bytes, HI_OFFSET), read_u32le(&bytes, LO_OFFSET))
-            }
-        };
-
-        u64_from_hilo(bg_inode_bitmap_hi, bg_inode_bitmap_lo)
+        self.inode_bitmap
+            .load(Ordering::Relaxed)
             .try_into()
             .unwrap()
     }
 
     pub(crate) fn inode_table_first_block(&self) -> FsBlockIndex {
-        const LO_OFFSET: usize = 0x8;
-        const HI_OFFSET: usize = 0x28;
-        let (bg_inode_table_hi, bg_inode_table_lo) = match self.bytes {
-            BlockGroupDescriptorBytes::OnDisk32(bytes) => {
-                (0, read_u32le(&bytes, LO_OFFSET))
-            }
-            BlockGroupDescriptorBytes::OnDisk64(bytes) => {
-                (read_u32le(&bytes, HI_OFFSET), read_u32le(&bytes, LO_OFFSET))
-            }
-        };
-
-        u64_from_hilo(bg_inode_table_hi, bg_inode_table_lo)
-            .try_into()
-            .unwrap()
+        self.inode_table_first_block.load(Ordering::Relaxed)
     }
 
     pub(crate) fn free_blocks_count(&self) -> u32 {
-        const LO_OFFSET: usize = 0xC;
-        const HI_OFFSET: usize = 0x2C;
-        let (bg_free_blocks_count_hi, bg_free_blocks_count_lo) = match self
-            .bytes
-        {
-            BlockGroupDescriptorBytes::OnDisk32(bytes) => {
-                (0, read_u16le(&bytes, LO_OFFSET))
-            }
-            BlockGroupDescriptorBytes::OnDisk64(bytes) => {
-                (read_u16le(&bytes, HI_OFFSET), read_u16le(&bytes, LO_OFFSET))
-            }
-        };
-
-        u32_from_hilo(bg_free_blocks_count_hi, bg_free_blocks_count_lo)
+        self.free_blocks_count.load(Ordering::Relaxed)
     }
 
-    pub(crate) fn set_free_blocks_count(
-        &mut self,
-        superblock: &Superblock,
-        count: u32,
-    ) {
-        const LO_OFFSET: usize = 0xC;
-        const HI_OFFSET: usize = 0x2C;
-        let (hi, lo) = u32_to_hilo(count);
-        match &mut self.bytes {
-            BlockGroupDescriptorBytes::OnDisk32(bytes) => {
-                assert_eq!(hi, 0);
-                write_u16le(bytes, LO_OFFSET, lo);
-            }
-            BlockGroupDescriptorBytes::OnDisk64(bytes) => {
-                write_u16le(bytes, HI_OFFSET, hi);
-                write_u16le(bytes, LO_OFFSET, lo);
-            }
-        };
-        self.update_checksum(superblock);
+    pub(crate) fn set_free_blocks_count(&self, count: u32) {
+        self.free_blocks_count.store(count, Ordering::Relaxed);
     }
 
     pub(crate) fn free_inodes_count(&self) -> u32 {
-        const LO_OFFSET: usize = 0xE;
-        const HI_OFFSET: usize = 0x2E;
-        let (bg_free_inodes_count_hi, bg_free_inodes_count_lo) = match self
-            .bytes
-        {
-            BlockGroupDescriptorBytes::OnDisk32(bytes) => {
-                (0, read_u16le(&bytes, LO_OFFSET))
-            }
-            BlockGroupDescriptorBytes::OnDisk64(bytes) => {
-                (read_u16le(&bytes, HI_OFFSET), read_u16le(&bytes, LO_OFFSET))
-            }
-        };
-
-        u32_from_hilo(bg_free_inodes_count_hi, bg_free_inodes_count_lo)
+        self.free_inodes_count.load(Ordering::Relaxed)
     }
 
-    pub(crate) fn set_free_inodes_count(
-        &mut self,
-        superblock: &Superblock,
-        count: u32,
-    ) {
-        const LO_OFFSET: usize = 0xE;
-        const HI_OFFSET: usize = 0x2E;
-        let (hi, lo) = u32_to_hilo(count);
-        match &mut self.bytes {
-            BlockGroupDescriptorBytes::OnDisk32(bytes) => {
-                assert_eq!(hi, 0);
-                write_u16le(bytes, LO_OFFSET, lo);
-            }
-            BlockGroupDescriptorBytes::OnDisk64(bytes) => {
-                write_u16le(bytes, HI_OFFSET, hi);
-                write_u16le(bytes, LO_OFFSET, lo);
-            }
-        };
-        self.update_checksum(superblock);
+    pub(crate) fn set_free_inodes_count(&mut self, count: u32) {
+        self.free_inodes_count.store(count, Ordering::Relaxed);
     }
 
     pub(crate) fn used_dirs_count(&self) -> u32 {
-        const LO_OFFSET: usize = 0x10;
-        const HI_OFFSET: usize = 0x30;
-        let (bg_used_dirs_count_hi, bg_used_dirs_count_lo) = match self.bytes {
-            BlockGroupDescriptorBytes::OnDisk32(bytes) => {
-                (0, read_u16le(&bytes, LO_OFFSET))
-            }
-            BlockGroupDescriptorBytes::OnDisk64(bytes) => {
-                (read_u16le(&bytes, HI_OFFSET), read_u16le(&bytes, LO_OFFSET))
-            }
-        };
-
-        u32_from_hilo(bg_used_dirs_count_hi, bg_used_dirs_count_lo)
+        self.used_dirs_count.load(Ordering::Relaxed)
     }
 
-    pub(crate) fn set_used_dirs_count(
-        &mut self,
-        superblock: &Superblock,
-        count: u32,
-    ) {
-        const LO_OFFSET: usize = 0x10;
-        const HI_OFFSET: usize = 0x30;
-        let (hi, lo) = u32_to_hilo(count);
-        match &mut self.bytes {
-            BlockGroupDescriptorBytes::OnDisk32(bytes) => {
-                assert_eq!(hi, 0);
-                write_u16le(bytes, LO_OFFSET, lo);
-            }
-            BlockGroupDescriptorBytes::OnDisk64(bytes) => {
-                write_u16le(bytes, HI_OFFSET, hi);
-                write_u16le(bytes, LO_OFFSET, lo);
-            }
-        };
-        self.update_checksum(superblock);
+    pub(crate) fn set_used_dirs_count(&mut self, count: u32) {
+        self.used_dirs_count.store(count, Ordering::Relaxed);
     }
 
     pub(crate) fn block_bitmap_checksum(&self) -> TruncatedChecksum {
-        const LO_OFFSET: usize = 0x18;
-        const HI_OFFSET: usize = 0x38;
-        match self.bytes {
-            BlockGroupDescriptorBytes::OnDisk32(bytes) => {
-                TruncatedChecksum::Truncated(read_u16le(&bytes, LO_OFFSET))
-            }
-            BlockGroupDescriptorBytes::OnDisk64(bytes) => {
-                TruncatedChecksum::Full(u32_from_hilo(
-                    read_u16le(&bytes, HI_OFFSET),
-                    read_u16le(&bytes, LO_OFFSET),
-                ))
-            }
-        }
+        (&self.block_bitmap_checksum).into()
     }
 
-    pub(crate) fn set_block_bitmap_checksum(
-        &mut self,
-        superblock: &Superblock,
-        checksum: u32,
-    ) {
-        const LO_OFFSET: usize = 0x18;
-        const HI_OFFSET: usize = 0x38;
-        let (hi, lo) = u32_to_hilo(checksum);
-        match &mut self.bytes {
-            BlockGroupDescriptorBytes::OnDisk32(bytes) => {
-                assert_eq!(hi, 0);
-                write_u16le(bytes, LO_OFFSET, lo);
-            }
-            BlockGroupDescriptorBytes::OnDisk64(bytes) => {
-                write_u16le(bytes, HI_OFFSET, hi);
-                write_u16le(bytes, LO_OFFSET, lo);
-            }
-        };
-        self.update_checksum(superblock);
+    pub(crate) fn set_block_bitmap_checksum(&mut self, checksum: u32) {
+        self.block_bitmap_checksum.update(checksum);
     }
 
     pub(crate) fn inode_bitmap_checksum(&self) -> TruncatedChecksum {
-        const LO_OFFSET: usize = 0x1A;
-        const HI_OFFSET: usize = 0x3A;
-
-        match self.bytes {
-            BlockGroupDescriptorBytes::OnDisk32(bytes) => {
-                TruncatedChecksum::Truncated(read_u16le(&bytes, LO_OFFSET))
-            }
-            BlockGroupDescriptorBytes::OnDisk64(bytes) => {
-                TruncatedChecksum::Full(u32_from_hilo(
-                    read_u16le(&bytes, HI_OFFSET),
-                    read_u16le(&bytes, LO_OFFSET),
-                ))
-            }
-        }
+        (&self.inode_bitmap_checksum).into()
     }
 
-    pub(crate) fn set_inode_bitmap_checksum(
-        &mut self,
-        superblock: &Superblock,
-        checksum: u32,
-    ) {
-        const LO_OFFSET: usize = 0x1A;
-        const HI_OFFSET: usize = 0x3A;
-        let (hi, lo) = u32_to_hilo(checksum);
-        match &mut self.bytes {
-            BlockGroupDescriptorBytes::OnDisk32(bytes) => {
-                assert_eq!(hi, 0);
-                write_u16le(bytes, LO_OFFSET, lo);
-            }
-            BlockGroupDescriptorBytes::OnDisk64(bytes) => {
-                write_u16le(bytes, HI_OFFSET, hi);
-                write_u16le(bytes, LO_OFFSET, lo);
-            }
-        };
-        self.update_checksum(superblock);
+    pub(crate) fn set_inode_bitmap_checksum(&mut self, checksum: u32) {
+        self.inode_bitmap_checksum.update(checksum);
     }
 
     fn checksum(&self) -> u16 {
-        read_u16le(self.bytes.deref(), Self::BG_CHECKSUM_OFFSET)
+        self.checksum.load(Ordering::Relaxed)
     }
 
     /// Map from a block group descriptor index to the absolute byte
@@ -448,7 +455,7 @@ impl BlockGroupDescriptor {
         // Write only the data we've saved to avoid overwriting any unread info
         let writer = ext4.0.writer.as_ref().ok_or(Ext4Error::Readonly)?;
         writer
-            .write(start, &self.bytes)
+            .write(start, &self.to_bytes())
             .await
             .map_err(Ext4Error::Io)?;
         Ok(())
