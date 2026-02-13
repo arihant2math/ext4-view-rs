@@ -145,7 +145,7 @@ impl JournalSuperblock {
         }
 
         // OK to unwrap: `s_uuid` is always 16 bytes.
-        let uuid = Uuid(s_uuid.try_into().unwrap());
+        let uuid = Uuid::new(s_uuid.try_into().unwrap());
 
         Ok(Self {
             block_size: s_blocksize,
