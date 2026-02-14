@@ -16,12 +16,14 @@ use crate::inode::InodeIndex;
 use crate::util::{read_u16le, read_u32le, u64_from_hilo, write_u32le};
 use crate::{Ext4, Label, Uuid};
 use core::num::NonZero;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 /// Information about the filesystem.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub(crate) struct Superblock {
     block_size: BlockSize,
     blocks_count: u64,
+    free_inodes_count: AtomicU32,
     inode_size: u16,
     inodes_per_block_group: NonZero<u32>,
     block_group_descriptor_size: u16,
@@ -35,6 +37,26 @@ pub(crate) struct Superblock {
     uuid: Uuid,
 
     data: [u8; Self::SIZE_IN_BYTES_ON_DISK],
+}
+
+impl PartialEq for Superblock {
+    fn eq(&self, other: &Self) -> bool {
+        self.block_size == other.block_size
+            && self.blocks_count == other.blocks_count
+            && self.inode_size == other.inode_size
+            && self.inodes_per_block_group == other.inodes_per_block_group
+            && self.block_group_descriptor_size
+                == other.block_group_descriptor_size
+            && self.num_block_groups == other.num_block_groups
+            && self.incompatible_features == other.incompatible_features
+            && self.read_only_compatible_features
+                == other.read_only_compatible_features
+            && self.checksum_seed == other.checksum_seed
+            && self.htree_hash_seed == other.htree_hash_seed
+            && self.journal_inode == other.journal_inode
+            && self.label == other.label
+            && self.uuid == other.uuid
+    }
 }
 
 impl Superblock {
@@ -52,6 +74,7 @@ impl Superblock {
 
         // OK to unwrap: already checked the length.
         let s_blocks_count_lo = read_u32le(bytes, 0x4);
+        let s_free_inodes_count = read_u32le(bytes, 0x10);
         let s_first_data_block = read_u32le(bytes, 0x14);
         let s_log_block_size = read_u32le(bytes, 0x18);
         let s_blocks_per_group = read_u32le(bytes, 0x20);
@@ -175,6 +198,7 @@ impl Superblock {
         Ok(Self {
             block_size,
             blocks_count,
+            free_inodes_count: AtomicU32::new(s_free_inodes_count),
             inode_size: s_inode_size,
             inodes_per_block_group,
             block_group_descriptor_size,
@@ -199,6 +223,11 @@ impl Superblock {
         }
         let mut data = self.data;
         // Update necessary fields in `data` that may have changed since superblock creation
+        write_u32le(
+            &mut data,
+            0x10,
+            self.free_inodes_count.load(Ordering::Relaxed),
+        );
         let mut checksum = Checksum::new();
         checksum.update(&data[..0x3fc]);
         let checksum_bytes = checksum.finalize().to_le_bytes();
@@ -337,6 +366,7 @@ mod tests {
             Superblock {
                 block_size: BlockSize::from_superblock_value(0).unwrap(),
                 blocks_count: 128,
+                free_inodes_count: AtomicU32::new(0), // TODO: not checked
                 inode_size: 256,
                 inodes_per_block_group: NonZero::new(16).unwrap(),
                 block_group_descriptor_size: 64,
