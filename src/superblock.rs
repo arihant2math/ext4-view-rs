@@ -33,6 +33,7 @@ pub(crate) struct Superblock {
     journal_inode: Option<InodeIndex>,
     label: Label,
     uuid: Uuid,
+
     data: [u8; Self::SIZE_IN_BYTES_ON_DISK],
 }
 
@@ -189,29 +190,29 @@ impl Superblock {
         })
     }
 
-    fn update_checksum(&mut self) {
+    fn to_bytes(&self) -> [u8; Self::SIZE_IN_BYTES_ON_DISK] {
         if !self
             .read_only_compatible_features
             .contains(ReadOnlyCompatibleFeatures::METADATA_CHECKSUMS)
         {
-            return;
+            return self.data;
         }
+        let mut data = self.data;
+        // Update necessary fields in `data` that may have changed since superblock creation
         let mut checksum = Checksum::new();
-        checksum.update(&self.data[..0x3fc]);
+        checksum.update(&data[..0x3fc]);
         let checksum_bytes = checksum.finalize().to_le_bytes();
-        self.data[0x3fc..].copy_from_slice(&checksum_bytes);
+        data[0x3fc..].copy_from_slice(&checksum_bytes);
+        data
     }
 
     #[expect(unused)]
-    pub(crate) async fn write(&mut self, ext4: &Ext4) -> Result<(), Ext4Error> {
-        self.update_checksum();
+    pub(crate) async fn write(&self, ext4: &Ext4) -> Result<(), Ext4Error> {
+        let data = self.to_bytes();
         // start byte
         let offset = 1024;
         let writer = ext4.0.writer.as_ref().ok_or(Ext4Error::Readonly)?;
-        writer
-            .write(offset, &self.data)
-            .await
-            .map_err(Ext4Error::Io)?;
+        writer.write(offset, &data).await.map_err(Ext4Error::Io)?;
         Ok(())
     }
 
