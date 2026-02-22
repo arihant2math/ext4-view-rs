@@ -235,7 +235,6 @@ impl Superblock {
         data
     }
 
-    #[expect(unused)]
     pub(crate) async fn write(&self, ext4: &Ext4) -> Result<(), Ext4Error> {
         let data = self.to_bytes();
         // start byte
@@ -303,14 +302,12 @@ impl Superblock {
         read_u32le(&self.data, 0x20)
     }
 
-    #[expect(unused)]
     pub(crate) fn free_inodes_count(&self) -> u32 {
-        read_u32le(&self.data, 0x10)
+        self.free_inodes_count.load(Ordering::Relaxed)
     }
 
-    #[expect(unused)]
-    pub(crate) fn set_free_inodes_count(&mut self, count: u32) {
-        write_u32le(&mut self.data, 0x10, count);
+    pub(crate) fn set_free_inodes_count(&self, count: u32) {
+        self.free_inodes_count.store(count, Ordering::Relaxed);
     }
 }
 

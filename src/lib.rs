@@ -416,6 +416,12 @@ impl Ext4 {
         BitmapHandle::new(block_group.block_bitmap_block())
     }
 
+    fn get_inode_bitmap_handle(&self, block_group_index: u32) -> BitmapHandle {
+        let block_group =
+            &self.0.block_group_descriptors[usize_from_u32(block_group_index)];
+        BitmapHandle::new(block_group.inode_bitmap_block())
+    }
+
     async fn update_block_bitmap_checksum(
         &self,
         block_group_index: u32,
@@ -424,6 +430,20 @@ impl Ext4 {
         let checksum = bitmap_handle.calc_checksum(self).await?;
         self.0.block_group_descriptors[usize_from_u32(block_group_index)]
             .set_block_bitmap_checksum(checksum);
+        self.0.block_group_descriptors[usize_from_u32(block_group_index)]
+            .write(self)
+            .await?;
+        Ok(())
+    }
+
+    async fn update_inode_bitmap_checksum(
+        &self,
+        block_group_index: u32,
+        bitmap_handle: BitmapHandle,
+    ) -> Result<(), Ext4Error> {
+        let checksum = bitmap_handle.calc_checksum(self).await?;
+        self.0.block_group_descriptors[usize_from_u32(block_group_index)]
+            .set_inode_bitmap_checksum(checksum);
         self.0.block_group_descriptors[usize_from_u32(block_group_index)]
             .write(self)
             .await?;
@@ -464,6 +484,65 @@ impl Ext4 {
         )
         .await?;
         Ok(())
+    }
+
+    #[expect(unused)]
+    pub(crate) async fn alloc_inode(
+        &self,
+        inode_type: FileType,
+    ) -> Result<InodeIndex, Ext4Error> {
+        let mut bg_id = 0;
+        let mut bg_count = self.0.superblock.blocks_count()
+            / self.0.superblock.blocks_per_group() as u64;
+        let mut rewind = false;
+        while bg_id <= bg_count {
+            if bg_id == bg_count {
+                if rewind {
+                    break;
+                }
+                bg_count = bg_id;
+                bg_id = 0;
+                rewind = true;
+                continue;
+            }
+
+            let bg =
+                self.0.block_group_descriptors.get(bg_id as usize).unwrap();
+
+            let free_inodes = bg.free_inodes_count();
+            let used_dirs = bg.used_dirs_count();
+
+            if free_inodes > 0 {
+                let inode_bitmap_handle = self.get_inode_bitmap_handle(bg_id as u32);
+                let Some(inode_num) =
+                    inode_bitmap_handle.find_first(false, self).await?
+                else {
+                    continue;
+                };
+                inode_bitmap_handle.set(inode_num, true, self).await?;
+                self.update_inode_bitmap_checksum(
+                    bg_id as u32,
+                    inode_bitmap_handle,
+                )
+                .await?;
+                bg.set_free_inodes_count(free_inodes - 1);
+
+                if matches!(inode_type, FileType::Directory) {
+                    bg.set_used_dirs_count(used_dirs + 1);
+                }
+                bg.write(self).await?;
+                let total_free_inodes = self.0.superblock.free_inodes_count();
+                self.0
+                    .superblock
+                    .set_free_inodes_count(total_free_inodes - 1);
+                self.0.superblock.write(self).await?;
+
+                return Ok(InodeIndex::try_from(inode_num).unwrap());
+            }
+
+            bg_id += 1;
+        }
+        Err(Ext4Error::NoSpace)
     }
 
     /// Read the entire contents of a file into a `Vec<u8>`.
