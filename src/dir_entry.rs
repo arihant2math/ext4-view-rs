@@ -65,7 +65,7 @@ impl Error for DirEntryNameError {}
 pub struct DirEntryName<'a>(pub(crate) &'a [u8]);
 
 impl<'a> DirEntryName<'a> {
-    /// Maximum length of a `DirEntryName`.
+    /// Maximum length of a [`DirEntryName`].
     pub const MAX_LEN: usize = 255;
 
     /// Convert to a `&str` if the name is valid UTF-8.
@@ -212,7 +212,7 @@ pub struct DirEntry {
     /// Raw name of the entry.
     name: DirEntryNameBuf,
 
-    /// Path that `read_dir` was called with. This is shared via `Rc` so
+    /// Path that `read_dir` was called with. This is shared via [`Arc`] so
     /// that only one allocation is required.
     path: Arc<PathBuf>,
 
@@ -221,17 +221,17 @@ pub struct DirEntry {
 }
 
 impl DirEntry {
-    /// Read a `DirEntry` from a byte slice.
+    /// Read a [`DirEntry`] from a byte slice.
     ///
     /// If no error occurs, this returns `(Option<DirEntry>, usize)`.
-    /// * The first value in this tuple is an `Option` because some
+    /// * The first value in this tuple is an [`Option`] because some
     ///   special data is stored in directory blocks that aren't
     ///   actually directory entries. If the inode pointed to by the
     ///   entry is zero, this value is set to None.
-    /// * The `NonZero<usize>` in this tuple is the overall length of
+    /// * The [`NonZero<usize>`] in this tuple is the overall length of
     ///   the entry's data. This is used when iterating over raw dir
-    ///   entry data. A `NonZero` is used because it's important for
-    ///   iterators that call `DirEntry::from_bytes` to make forward
+    ///   entry data. A [`NonZero`] is used because it's important for
+    ///   iterators that call [`DirEntry::from_bytes`] to make forward
     ///   progress. A length of zero would cause them to enter an
     ///   infinite loop.
     pub(crate) fn from_bytes(
