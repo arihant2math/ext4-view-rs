@@ -342,7 +342,7 @@ impl BlockGroupDescriptor {
         self.free_inodes_count.load(Ordering::Relaxed)
     }
 
-    pub(crate) fn set_free_inodes_count(&mut self, count: u32) {
+    pub(crate) fn set_free_inodes_count(&self, count: u32) {
         self.free_inodes_count.store(count, Ordering::Relaxed);
     }
 
@@ -350,7 +350,7 @@ impl BlockGroupDescriptor {
         self.used_dirs_count.load(Ordering::Relaxed)
     }
 
-    pub(crate) fn set_used_dirs_count(&mut self, count: u32) {
+    pub(crate) fn set_used_dirs_count(&self, count: u32) {
         self.used_dirs_count.store(count, Ordering::Relaxed);
     }
 
