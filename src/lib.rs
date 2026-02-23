@@ -546,6 +546,62 @@ impl Ext4 {
         Err(Ext4Error::NoSpace)
     }
 
+    #[expect(unused)]
+    pub(crate) async fn alloc_block(
+        &self,
+        inode: &Inode,
+    ) -> Result<FsBlockIndex, Ext4Error> {
+        let mut bg_id = (inode.index.get() - 1)
+            / self.0.superblock.inodes_per_block_group();
+        let mut bg_count = self.0.superblock.blocks_count() as u32
+            / self.0.superblock.blocks_per_group();
+        let mut rewind = false;
+        while bg_id <= bg_count {
+            if bg_id == bg_count {
+                if rewind {
+                    break;
+                }
+                bg_count = bg_id;
+                bg_id = 0;
+                rewind = true;
+                continue;
+            }
+
+            let bg =
+                self.0.block_group_descriptors.get(bg_id as usize).unwrap();
+
+            let free_blocks = bg.free_blocks_count();
+
+            if free_blocks > 0 {
+                let block_bitmap_handle = self.get_block_bitmap_handle(bg_id);
+                let Some(block_num) =
+                    block_bitmap_handle.find_first(false, self).await?
+                else {
+                    continue;
+                };
+                block_bitmap_handle.set(block_num, true, self).await?;
+                self.update_block_bitmap_checksum(bg_id, block_bitmap_handle)
+                    .await?;
+                bg.set_free_blocks_count(free_blocks - 1);
+                bg.write(self).await?;
+
+                // Zero out the new block
+                let block_index = (bg_id as u64
+                    * self.0.superblock.blocks_per_group() as u64)
+                    + block_num as u64;
+                let zeroes = vec![0; self.0.superblock.block_size().to_usize()];
+                self.write_to_block(block_index, 0, &zeroes).await?;
+
+                return Ok((bg_id as u64
+                    * self.0.superblock.blocks_per_group() as u64)
+                    + block_num as u64);
+            }
+
+            bg_id += 1;
+        }
+        Err(Ext4Error::NoSpace)
+    }
+
     /// Create a new inode of the given type, and return its index.
     pub async fn create_inode(
         &self,
