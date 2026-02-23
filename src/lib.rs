@@ -546,7 +546,6 @@ impl Ext4 {
         Err(Ext4Error::NoSpace)
     }
 
-    #[expect(unused)]
     pub(crate) async fn alloc_block(
         &self,
         inode: &Inode,

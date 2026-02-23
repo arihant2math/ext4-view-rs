@@ -407,6 +407,11 @@ impl Inode {
         i_block.try_into().unwrap()
     }
 
+    pub(crate) fn set_inline_data(&mut self, data: [u8; Self::INLINE_DATA_LEN]) {
+        self.inode_data[0x28..0x28 + Self::INLINE_DATA_LEN]
+            .copy_from_slice(&data);
+    }
+
     /// Get the inode's mode bits.
     pub fn mode(&self) -> InodeMode {
         let i_mode = read_u16le(&self.inode_data, 0x0);

@@ -41,6 +41,20 @@ impl FileBlocks {
             Ok(Self(FileBlocksInner::BlockMap(BlockMap::new(fs, inode))))
         }
     }
+
+    #[expect(unused)]
+    pub(crate) async fn allocate(
+        &mut self,
+        inode: &mut Inode,
+        amount: u32,
+    ) -> Result<(), Ext4Error> {
+        match self {
+            Self(FileBlocksInner::ExtentsBlocks(_)) => todo!(),
+            Self(FileBlocksInner::BlockMap(iter)) => {
+                iter.allocate(inode, amount).await
+            }
+        }
+    }
 }
 
 impl AsyncIterator for FileBlocks {

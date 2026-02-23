@@ -13,6 +13,65 @@ use crate::util::read_u32le;
 use crate::{Ext4, Ext4Error};
 use alloc::vec;
 use alloc::vec::Vec;
+use crate::error::CorruptKind;
+
+enum BlockLocation {
+    Direct(u8),
+    Indirect(u32),
+    DoubleIndirect(u32, u32),
+    TripleIndirect(u32, u32, u32),
+}
+
+impl BlockLocation {
+    fn new(block_within_file: u32) -> Self {
+        if block_within_file <= 11 {
+            Self::Direct(block_within_file as u8)
+        } else if block_within_file <= 11 + 256 {
+            Self::Indirect(block_within_file - 12)
+        } else if block_within_file <= 11 + 256 + 256 * 256 {
+            let block_within_indirect = block_within_file - 12 - 256;
+            Self::DoubleIndirect(
+                block_within_indirect / 256,
+                block_within_indirect % 256,
+            )
+        } else {
+            let block_within_double_indirect =
+                block_within_file - 12 - 256 - 256 * 256;
+            Self::TripleIndirect(
+                block_within_double_indirect / (256 * 256),
+                (block_within_double_indirect / 256) % 256,
+                block_within_double_indirect % 256,
+            )
+        }
+    }
+
+    #[expect(unused)]
+    fn next(&self) -> Option<Self> {
+        match self {
+            Self::Direct(i) if *i < 11 => Some(Self::Direct(*i + 1)),
+            Self::Direct(_) => Some(Self::Indirect(0)),
+            Self::Indirect(i) if *i < 255 => Some(Self::Indirect(*i + 1)),
+            Self::Indirect(_) => Some(Self::DoubleIndirect(0, 0)),
+            Self::DoubleIndirect(i, j) if *j < 255 => {
+                Some(Self::DoubleIndirect(*i, *j + 1))
+            }
+            Self::DoubleIndirect(i, _) if *i < 255 => {
+                Some(Self::DoubleIndirect(*i + 1, 0))
+            }
+            Self::DoubleIndirect(_, _) => Some(Self::TripleIndirect(0, 0, 0)),
+            Self::TripleIndirect(i, j, k) if *k < 255 => {
+                Some(Self::TripleIndirect(*i, *j, *k + 1))
+            }
+            Self::TripleIndirect(i, j, _) if *j < 255 => {
+                Some(Self::TripleIndirect(*i, *j + 1, 0))
+            }
+            Self::TripleIndirect(i, _, _) if *i < 255 => {
+                Some(Self::TripleIndirect(*i + 1, 0, 0))
+            }
+            Self::TripleIndirect(_, _, _) => None,
+        }
+    }
+}
 
 /// Block map iterator.
 ///
@@ -90,6 +149,165 @@ impl BlockMap {
             level_3: None,
             is_done: false,
         }
+    }
+
+    /// Returns 0 if the block is a hole
+    async fn get_indirect_block(
+        &self,
+        block_index: u32,
+        block_within_indirect: u32,
+    ) -> Result<u32, Ext4Error> {
+        let mut dst = [0; 4];
+        self.fs
+            .read_from_block(
+                block_index as FsBlockIndex,
+                block_within_indirect,
+                &mut dst,
+            )
+            .await?;
+        Ok(read_u32le(&dst, 0))
+    }
+
+    /// Returns Ok(None) if the block within the file is out of bounds.
+    #[expect(unused)]
+    pub(crate) async fn get(
+        &self,
+        block_within_file: u32,
+    ) -> Result<Option<u32>, Ext4Error> {
+        if block_within_file >= self.num_blocks_total {
+            return Ok(None);
+        }
+        match BlockLocation::new(block_within_file) {
+            BlockLocation::Direct(i) => Ok(Some(self.level_0[i as usize])),
+            BlockLocation::Indirect(i) => {
+                if self.level_0[12] == 0 {
+                    return Err(CorruptKind::MissingPointerBlock {
+                        block: block_within_file,
+                        level: 1,
+                    })?;
+                }
+                Ok(Some(self.get_indirect_block(self.level_0[12], i).await?))
+            }
+            BlockLocation::DoubleIndirect(i, j) => {
+                if self.level_0[13] == 0 {
+                    return Err(CorruptKind::MissingPointerBlock {
+                        block: block_within_file,
+                        level: 1,
+                    })?;
+                }
+                let indirect_block =
+                    self.get_indirect_block(self.level_0[13], i).await?;
+                if indirect_block == 0 {
+                    return Err(CorruptKind::MissingPointerBlock {
+                        block: block_within_file,
+                        level: 2,
+                    })?;
+                }
+                Ok(Some(self.get_indirect_block(indirect_block, j).await?))
+            }
+            BlockLocation::TripleIndirect(i, j, k) => {
+                if self.level_0[14] == 0 {
+                    return Err(CorruptKind::MissingPointerBlock {
+                        block: block_within_file,
+                        level: 1,
+                    })?;
+                }
+                let double_indirect_block =
+                    self.get_indirect_block(self.level_0[14], i).await?;
+                if double_indirect_block == 0 {
+                    return Err(CorruptKind::MissingPointerBlock {
+                        block: block_within_file,
+                        level: 2,
+                    })?;
+                }
+                let indirect_block =
+                    self.get_indirect_block(double_indirect_block, j).await?;
+                if indirect_block == 0 {
+                    return Err(CorruptKind::MissingPointerBlock {
+                        block: block_within_file,
+                        level: 3,
+                    })?;
+                }
+                Ok(Some(self.get_indirect_block(indirect_block, k).await?))
+            }
+        }
+    }
+
+    async fn allocate_one(&mut self, inode: &Inode) -> Result<(), Ext4Error> {
+        let id = self.fs.alloc_block(inode).await?;
+        match BlockLocation::new(self.num_blocks_total) {
+            BlockLocation::Direct(i) => self.level_0[i as usize] = id.try_into().map_err(|_| Ext4Error::BlockMapTooManyBlocks)?,
+            BlockLocation::Indirect(i) => {
+                if self.level_0[12] == 0 {
+                    self.level_0[12] = self.fs.alloc_block(inode).await?.try_into().map_err(|_| Ext4Error::BlockMapTooManyBlocks)?;
+                }
+                self.fs
+                    .write_to_block(
+                        FsBlockIndex::from(self.level_0[12]),
+                        i,
+                        &id.to_le_bytes(),
+                    )
+                    .await?;
+            }
+            BlockLocation::DoubleIndirect(i, j) => {
+                if self.level_0[13] == 0 {
+                    self.level_0[13] = self.fs.alloc_block(inode).await?.try_into().map_err(|_| Ext4Error::BlockMapTooManyBlocks)?;
+                }
+                let indirect_block = self.get_indirect_block(self.level_0[13], i).await?;
+                if indirect_block == 0 {
+                    let new_indirect_block = self.fs.alloc_block(inode).await?;
+                    self.fs.write_to_block(
+                        FsBlockIndex::from(self.level_0[13]),
+                        i,
+                        &new_indirect_block.to_le_bytes(),
+                    ).await?;
+                    self.fs.write_to_block(
+                        FsBlockIndex::from(new_indirect_block),
+                        j,
+                        &id.to_le_bytes(),
+                    ).await?;
+                } else {
+                    self.fs.write_to_block(
+                        FsBlockIndex::from(indirect_block),
+                        j,
+                        &id.to_le_bytes(),
+                    ).await?;
+                }
+            }
+            _ => todo!(),
+        }
+        self.num_blocks_total = self
+            .num_blocks_total
+            .checked_add(1)
+            .ok_or(Ext4Error::FileTooLarge)?;
+        if self.is_done && self.num_blocks_yielded < self.num_blocks_total {
+            self.is_done = false;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn allocate(
+        &mut self,
+        inode: &mut Inode,
+        amount: u32,
+    ) -> Result<(), Ext4Error> {
+        if self.num_blocks_total.checked_add(amount).is_none() {
+            return Err(Ext4Error::FileTooLarge);
+        }
+        for _ in 0..amount {
+            self.allocate_one(inode).await?;
+        }
+        let mut new_inline_data = vec![0; self.level_0.len() * size_of::<u32>()];
+        for (i, block_index) in self.level_0.iter().enumerate() {
+            // OK to unwrap: `i` is at most 14, so the product is at
+            // most `14*4=56`, which fits in a `usize`.
+            let dst_offset: usize = i.checked_mul(size_of::<u32>()).unwrap();
+            new_inline_data[dst_offset..dst_offset + 4]
+                .copy_from_slice(&block_index.to_le_bytes());
+        }
+        inode.set_inline_data(new_inline_data.try_into().unwrap());
+        inode.write(&self.fs).await?;
+        Ok(())
     }
 
     #[track_caller]

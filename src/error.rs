@@ -102,6 +102,9 @@ pub enum Ext4Error {
 
     /// No space to perform operation
     NoSpace,
+
+    /// Block ids have exceeded the maximum supported value for a block map file
+    BlockMapTooManyBlocks,
 }
 
 impl Ext4Error {
@@ -142,6 +145,10 @@ impl Display for Ext4Error {
             Self::Corrupt(c) => write!(f, "corrupt filesystem: {c}"),
             Self::Readonly => write!(f, "filesystem is read-only"),
             Self::NoSpace => write!(f, "no space left on device"),
+            Self::BlockMapTooManyBlocks => write!(
+                f,
+                "file has too many blocks for block map file (exceeds 2^32)"
+            ),
         }
     }
 }
@@ -175,6 +182,7 @@ impl From<Ext4Error> for std::io::Error {
             Ext4Error::Readonly => PermissionDenied.into(),
             // TODO: Fix
             Ext4Error::NoSpace => Self::other(e),
+            Ext4Error::BlockMapTooManyBlocks => Self::other(e),
         }
     }
 }
@@ -400,6 +408,13 @@ pub(crate) enum CorruptKind {
         /// Length in bytes of the read.
         write_len: usize,
     },
+
+    MissingPointerBlock {
+        block: u32,
+        /// Level of the pointer block that is missing, where 0 is a
+        /// direct block, 1 is a single indirect block, etc.
+        level: u32,
+    },
 }
 
 impl Display for CorruptKind {
@@ -604,6 +619,12 @@ impl Display for CorruptKind {
                 write!(
                     f,
                     "invalid write of length {write_len} to block {block_index} (originally {original_block_index}) at offset {offset_within_block}"
+                )
+            }
+            Self::MissingPointerBlock { block, level } => {
+                write!(
+                    f,
+                    "Missing a level {level} pointer block when getting block {block}"
                 )
             }
         }
