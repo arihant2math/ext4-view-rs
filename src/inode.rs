@@ -6,7 +6,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use crate::Ext4;
 use crate::block_index::FsBlockIndex;
 use crate::checksum::Checksum;
 use crate::error::{CorruptKind, Ext4Error};
@@ -17,6 +16,7 @@ use crate::util::{
     read_u16le, read_u32le, u32_from_hilo, u32_to_hilo, u64_from_hilo,
     u64_to_hilo, usize_from_u32, write_u16le, write_u32le,
 };
+use crate::{Ext4, IncompatibleFeatures};
 use alloc::vec;
 use alloc::vec::Vec;
 use bitflags::bitflags;
@@ -27,6 +27,15 @@ use core::time::Duration;
 ///
 /// This is always nonzero.
 pub(crate) type InodeIndex = NonZeroU32;
+
+pub struct InodeCreationOptions {
+    pub file_type: FileType,
+    pub mode: InodeMode,
+    pub uid: u32,
+    pub gid: u32,
+    pub time: Duration,
+    pub flags: InodeFlags,
+}
 
 bitflags! {
     /// Inode flags.
@@ -203,6 +212,51 @@ impl Inode {
             },
             checksum,
         ))
+    }
+
+    /// Initialize a new inode with the given index and creation data, and write it to disk.
+    /// Assumes that the caller has already allocated the inode and is passing in a valid index.
+    pub(crate) async fn create(
+        ext4: &Ext4,
+        index: InodeIndex,
+        inode_creation_data: InodeCreationOptions,
+    ) -> Result<Self, Ext4Error> {
+        let inode_data = vec![0; usize::from(ext4.0.superblock.inode_size())];
+
+        let mut inode = Self {
+            index,
+            file_type: inode_creation_data.file_type,
+            inode_data,
+            checksum_base: Checksum::with_seed(
+                ext4.0.superblock.checksum_seed(),
+            ),
+            file_size_in_blocks: 0,
+        };
+
+        inode.set_mode(inode_creation_data.mode)?;
+        inode.set_uid(inode_creation_data.uid);
+        inode.set_gid(inode_creation_data.gid);
+        inode.set_size_in_bytes(0);
+        inode.set_atime(inode_creation_data.time);
+        inode.set_ctime(inode_creation_data.time);
+        inode.set_mtime(inode_creation_data.time);
+        inode.set_dtime(Duration::from_secs(0));
+        inode.set_links_count(0);
+        let mut flags = inode_creation_data.flags;
+        if ext4
+            .0
+            .superblock
+            .incompatible_features()
+            .contains(IncompatibleFeatures::EXTENTS)
+        {
+            flags.insert(InodeFlags::EXTENTS);
+            todo!("Initialize extent tree for new inode");
+        } else {
+            flags.remove(InodeFlags::EXTENTS);
+        }
+        inode.set_flags(flags);
+        inode.write(ext4).await?;
+        Ok(inode)
     }
 
     /// Read an inode.
