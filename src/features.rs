@@ -31,7 +31,9 @@ bitflags! {
         const SEPARATE_JOURNAL_DEVICE = 0x8;
 
         const META_BLOCK_GROUPS = 0x10;
+        /// Filesystem support extents
         const EXTENTS = 0x40;
+        /// Filesystem uses 64-bit refs (larger superblock, block group desc, inode, etc.)
         const IS_64BIT = 0x80;
         const MULTIPLE_MOUNT_PROTECTION = 0x100;
         const FLEXIBLE_BLOCK_GROUPS = 0x200;
