@@ -148,6 +148,7 @@ use bitmap::BitmapHandle;
 use block_group::BlockGroupDescriptor;
 use block_index::FsBlockIndex;
 use core::fmt::{self, Debug, Formatter};
+use core::num::NonZeroU64;
 use error::CorruptKind;
 use features::ReadOnlyCompatibleFeatures;
 use inode::InodeIndex;
@@ -456,12 +457,12 @@ impl Ext4 {
         &self,
         block_index: FsBlockIndex,
     ) -> Result<bool, Ext4Error> {
-        let block_group_index =
-            block_index as u64 / self.0.superblock.blocks_per_group() as u64;
+        let block_group_index = u64::from(block_index)
+            / NonZeroU64::from(self.0.superblock.blocks_per_group());
         let bitmap_handle =
             self.get_block_bitmap_handle(block_group_index as u32);
-        let block_offset =
-            block_index % self.0.superblock.blocks_per_group() as u64;
+        let block_offset = block_index
+            % NonZeroU64::from(self.0.superblock.blocks_per_group());
         bitmap_handle.query(block_offset as u32, self).await
     }
 
@@ -471,12 +472,12 @@ impl Ext4 {
         block_index: FsBlockIndex,
         used: bool,
     ) -> Result<(), Ext4Error> {
-        let block_group_index =
-            block_index as u64 / self.0.superblock.blocks_per_group() as u64;
+        let block_group_index = u64::from(block_index)
+            / NonZeroU64::from(self.0.superblock.blocks_per_group());
         let bitmap_handle =
             self.get_block_bitmap_handle(block_group_index as u32);
         let block_offset =
-            block_index % self.0.superblock.blocks_per_group() as u64;
+            block_index % u64::from(self.0.superblock.blocks_per_group().get());
         bitmap_handle.set(block_offset as u32, used, self).await?;
         self.update_block_bitmap_checksum(
             block_group_index as u32,
@@ -492,7 +493,7 @@ impl Ext4 {
     ) -> Result<InodeIndex, Ext4Error> {
         let mut bg_id = 0;
         let mut bg_count = self.0.superblock.blocks_count()
-            / self.0.superblock.blocks_per_group() as u64;
+            / NonZeroU64::from(self.0.superblock.blocks_per_group());
         let mut rewind = false;
         while bg_id <= bg_count {
             if bg_id == bg_count {
@@ -528,7 +529,7 @@ impl Ext4 {
                 bg.set_free_inodes_count(free_inodes - 1);
 
                 if matches!(inode_type, FileType::Directory) {
-                    bg.set_used_dirs_count(used_dirs + 1);
+                    bg.set_used_dirs_count(used_dirs.saturating_add(1));
                 }
                 bg.write(self).await?;
                 let total_free_inodes = self.0.superblock.free_inodes_count();
@@ -540,7 +541,8 @@ impl Ext4 {
                 return Ok(InodeIndex::try_from(inode_num).unwrap());
             }
 
-            bg_id += 1;
+            // Will never overflow
+            bg_id = bg_id.saturating_add(1);
         }
         Err(Ext4Error::NoSpace)
     }
@@ -552,8 +554,9 @@ impl Ext4 {
     ) -> Result<FsBlockIndex, Ext4Error> {
         let mut bg_id = (inode.index.get() - 1)
             / self.0.superblock.inodes_per_block_group();
-        let mut bg_count = self.0.superblock.blocks_count() as u32
-            / self.0.superblock.blocks_per_group();
+        let mut bg_count = (self.0.superblock.blocks_count()
+            / NonZeroU64::from(self.0.superblock.blocks_per_group()))
+            as u32;
         let mut rewind = false;
         while bg_id <= bg_count {
             if bg_id == bg_count {
@@ -566,11 +569,15 @@ impl Ext4 {
                 continue;
             }
 
-            let bg =
-                self.0.block_group_descriptors.get(bg_id as usize).unwrap();
+            let bg = self
+                .0
+                .block_group_descriptors
+                .get(usize_from_u32(bg_id))
+                .unwrap();
 
             let free_blocks = bg.free_blocks_count();
 
+            // TODO: capture with NonZeroU32 and subtract 1 without panic
             if free_blocks > 0 {
                 let block_bitmap_handle = self.get_block_bitmap_handle(bg_id);
                 let Some(block_num) =
@@ -581,22 +588,22 @@ impl Ext4 {
                 block_bitmap_handle.set(block_num, true, self).await?;
                 self.update_block_bitmap_checksum(bg_id, block_bitmap_handle)
                     .await?;
-                bg.set_free_blocks_count(free_blocks - 1);
+                bg.set_free_blocks_count(free_blocks - 1u32);
                 bg.write(self).await?;
 
                 // Zero out the new block
-                let block_index = (bg_id as u64
-                    * self.0.superblock.blocks_per_group() as u64)
-                    + block_num as u64;
+                let block_index = (u64::from(bg_id)
+                    * NonZeroU64::from(self.0.superblock.blocks_per_group())
+                        .get())
+                    + u64::from(block_num);
                 let zeroes = vec![0; self.0.superblock.block_size().to_usize()];
                 self.write_to_block(block_index, 0, &zeroes).await?;
 
-                return Ok((bg_id as u64
-                    * self.0.superblock.blocks_per_group() as u64)
-                    + block_num as u64);
+                return Ok(block_index);
             }
 
-            bg_id += 1;
+            // Will never overflow
+            bg_id = bg_id.saturating_add(1);
         }
         Err(Ext4Error::NoSpace)
     }

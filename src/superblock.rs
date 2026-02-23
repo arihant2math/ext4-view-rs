@@ -15,7 +15,7 @@ use crate::features::{
 use crate::inode::InodeIndex;
 use crate::util::{read_u16le, read_u32le, u64_from_hilo, write_u32le};
 use crate::{Ext4, Label, Uuid};
-use core::num::NonZero;
+use core::num::NonZeroU32;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 /// Information about the filesystem.
@@ -25,7 +25,7 @@ pub(crate) struct Superblock {
     blocks_count: u64,
     free_inodes_count: AtomicU32,
     inode_size: u16,
-    inodes_per_block_group: NonZero<u32>,
+    inodes_per_block_group: NonZeroU32,
     block_group_descriptor_size: u16,
     num_block_groups: u32,
     incompatible_features: IncompatibleFeatures,
@@ -131,7 +131,7 @@ impl Superblock {
         )
         .map_err(|_| CorruptKind::TooManyBlockGroups)?;
 
-        let inodes_per_block_group = NonZero::new(s_inodes_per_group)
+        let inodes_per_block_group = NonZeroU32::new(s_inodes_per_group)
             .ok_or(CorruptKind::InodesPerBlockGroup)?;
 
         let block_group_descriptor_size =
@@ -256,7 +256,7 @@ impl Superblock {
         self.inode_size
     }
 
-    pub(crate) fn inodes_per_block_group(&self) -> NonZero<u32> {
+    pub(crate) fn inodes_per_block_group(&self) -> NonZeroU32 {
         self.inodes_per_block_group
     }
 
@@ -298,8 +298,9 @@ impl Superblock {
         self.uuid
     }
 
-    pub(crate) fn blocks_per_group(&self) -> u32 {
-        read_u32le(&self.data, 0x20)
+    pub(crate) fn blocks_per_group(&self) -> NonZeroU32 {
+        NonZeroU32::new(read_u32le(&self.data, 0x20))
+            .expect("blocks per group cannot be zero")
     }
 
     pub(crate) fn free_inodes_count(&self) -> u32 {
@@ -352,6 +353,7 @@ fn check_incompat_features(
 
 #[cfg(test)]
 mod tests {
+    use core::num::NonZero;
     use super::*;
 
     #[test]

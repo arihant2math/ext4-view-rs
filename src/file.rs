@@ -67,6 +67,7 @@ impl File {
     }
 
     /// Access the internal [`Inode`] for this file. This allows for reading metadata etc.
+    #[must_use]
     pub fn inode(&self) -> &Inode {
         &self.inode
     }

@@ -33,8 +33,8 @@ impl Deref for BlockGroupDescriptorBytes {
 
     fn deref(&self) -> &[u8] {
         match self {
-            BlockGroupDescriptorBytes::OnDisk32(bytes) => bytes,
-            BlockGroupDescriptorBytes::OnDisk64(bytes) => bytes,
+            Self::OnDisk32(bytes) => bytes,
+            Self::OnDisk64(bytes) => bytes,
         }
     }
 }
@@ -67,12 +67,8 @@ pub(crate) enum AtomicTruncatedChecksum {
 impl AtomicTruncatedChecksum {
     fn update(&self, checksum: u32) {
         match self {
-            AtomicTruncatedChecksum::Truncated(c) => {
-                c.store(checksum as u16, Ordering::Relaxed)
-            }
-            AtomicTruncatedChecksum::Full(c) => {
-                c.store(checksum, Ordering::Relaxed)
-            }
+            Self::Truncated(c) => c.store(checksum as u16, Ordering::Relaxed),
+            Self::Full(c) => c.store(checksum, Ordering::Relaxed),
         }
     }
 }
@@ -313,17 +309,11 @@ impl BlockGroupDescriptor {
     }
 
     pub(crate) fn block_bitmap_block(&self) -> FsBlockIndex {
-        self.block_bitmap
-            .load(Ordering::Relaxed)
-            .try_into()
-            .unwrap()
+        self.block_bitmap.load(Ordering::Relaxed)
     }
 
     pub(crate) fn inode_bitmap_block(&self) -> FsBlockIndex {
-        self.inode_bitmap
-            .load(Ordering::Relaxed)
-            .try_into()
-            .unwrap()
+        self.inode_bitmap.load(Ordering::Relaxed)
     }
 
     pub(crate) fn inode_table_first_block(&self) -> FsBlockIndex {

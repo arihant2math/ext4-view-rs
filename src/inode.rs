@@ -6,6 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use crate::Ext4;
 use crate::block_index::FsBlockIndex;
 use crate::checksum::Checksum;
 use crate::error::{CorruptKind, Ext4Error};
@@ -16,7 +17,6 @@ use crate::util::{
     read_u16le, read_u32le, u32_from_hilo, u32_to_hilo, u64_from_hilo,
     u64_to_hilo, usize_from_u32, write_u16le, write_u32le,
 };
-use crate::Ext4;
 use alloc::vec;
 use alloc::vec::Vec;
 use bitflags::bitflags;
@@ -341,14 +341,13 @@ impl Inode {
             // Rest of the inode.
             checksum.update(&self.inode_data[Self::I_CHECKSUM_HI_OFFSET + 2..]);
             let final_checksum = checksum.finalize();
+            let (checksum_hi, checksum_lo) = u32_to_hilo(final_checksum);
             self.inode_data[Self::L_I_CHECKSUM_LO_OFFSET
                 ..Self::L_I_CHECKSUM_LO_OFFSET + 2]
-                .copy_from_slice(&(final_checksum as u16).to_le_bytes());
+                .copy_from_slice(&checksum_lo.to_le_bytes());
             self.inode_data
                 [Self::I_CHECKSUM_HI_OFFSET..Self::I_CHECKSUM_HI_OFFSET + 2]
-                .copy_from_slice(
-                    &((final_checksum >> 16) as u16).to_le_bytes(),
-                );
+                .copy_from_slice(&checksum_hi.to_le_bytes());
         }
     }
 
@@ -414,6 +413,7 @@ impl Inode {
         self.file_size_in_blocks
     }
 
+    #[must_use]
     pub(crate) fn inline_data(&self) -> [u8; Self::INLINE_DATA_LEN] {
         // OK to unwrap: already checked the length.
         let i_block = self
@@ -425,6 +425,7 @@ impl Inode {
     }
 
     /// Get the inode's mode bits.
+    #[must_use]
     pub fn mode(&self) -> InodeMode {
         let i_mode = read_u16le(&self.inode_data, 0x0);
         InodeMode::from_bits_retain(i_mode)
@@ -443,6 +444,7 @@ impl Inode {
     }
 
     /// Get the file type based on the mode bits.
+    #[must_use]
     pub fn file_type(&self) -> FileType {
         self.file_type
     }
@@ -453,6 +455,7 @@ impl Inode {
     }
 
     /// Get the inode's user ID.
+    #[must_use]
     pub fn uid(&self) -> u32 {
         let i_uid = read_u16le(&self.inode_data, 0x2);
         let l_i_uid_high = read_u16le(&self.inode_data, 0x74 + 0x4);
@@ -467,6 +470,7 @@ impl Inode {
     }
 
     /// Get the inode's group ID.
+    #[must_use]
     pub fn gid(&self) -> u32 {
         let i_gid = read_u16le(&self.inode_data, 0x18);
         let l_i_gid_high = read_u16le(&self.inode_data, 0x74 + 0x6);
@@ -481,6 +485,7 @@ impl Inode {
     }
 
     /// Get the inode's size in bytes.
+    #[must_use]
     pub fn size_in_bytes(&self) -> u64 {
         let i_size_lo = read_u32le(&self.inode_data, 0x4);
         let i_size_high = read_u32le(&self.inode_data, 0x6c);
@@ -495,6 +500,7 @@ impl Inode {
     }
 
     /// Get the inode's access time.
+    #[must_use]
     pub fn atime(&self) -> Duration {
         let i_atime = read_u32le(&self.inode_data, 0x8);
         timestamp_to_duration(i_atime, None)
@@ -507,6 +513,7 @@ impl Inode {
     }
 
     /// Get the inode's creation time.
+    #[must_use]
     pub fn ctime(&self) -> Duration {
         let i_ctime = read_u32le(&self.inode_data, 0xc);
         timestamp_to_duration(i_ctime, None)
@@ -519,6 +526,7 @@ impl Inode {
     }
 
     /// Get the inode's modification time.
+    #[must_use]
     pub fn mtime(&self) -> Duration {
         let i_mtime = read_u32le(&self.inode_data, 0x10);
         timestamp_to_duration(i_mtime, None)
@@ -531,6 +539,7 @@ impl Inode {
     }
 
     /// Get the inode's delete time.
+    #[must_use]
     pub fn dtime(&self) -> Duration {
         let i_dtime = read_u32le(&self.inode_data, 0x14);
         timestamp_to_duration(i_dtime, None)
@@ -543,6 +552,7 @@ impl Inode {
     }
 
     /// Get the inode's links count.
+    #[must_use]
     pub fn links_count(&self) -> u16 {
         read_u16le(&self.inode_data, 0x1a)
     }
@@ -553,6 +563,7 @@ impl Inode {
     }
 
     /// Get the inode's metadata.
+    #[must_use]
     pub fn metadata(&self) -> Metadata {
         let i_mode = read_u16le(&self.inode_data, 0x0);
         let i_uid = read_u16le(&self.inode_data, 0x2);
@@ -590,6 +601,7 @@ impl Inode {
     }
 
     /// Get the inode's flags.
+    #[must_use]
     pub fn flags(&self) -> InodeFlags {
         let i_flags = read_u32le(&self.inode_data, 0x20);
         InodeFlags::from_bits_retain(i_flags)

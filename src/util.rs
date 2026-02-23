@@ -38,6 +38,7 @@ pub(crate) fn u64_from_hilo(hi: u32, lo: u32) -> u64 {
 /// Split a `u64` into two `u32` values, returning the high 32 bits and low 32 bits.
 #[inline]
 #[must_use]
+#[expect(clippy::as_conversions)]
 pub(crate) fn u64_to_hilo(val: u64) -> (u32, u32) {
     let hi = (val >> 32) as u32;
     let lo = (val & 0xffff_ffff) as u32;
