@@ -155,6 +155,7 @@ use superblock::Superblock;
 use util::usize_from_u32;
 
 use crate::bitmap::BitmapHandle;
+use crate::inode::InodeCreationOptions;
 pub use dir::get_dir_entry_inode_by_name;
 pub use dir_entry::{DirEntry, DirEntryName, DirEntryNameError};
 pub use error::{Corrupt, Ext4Error, Incompatible};
@@ -486,7 +487,6 @@ impl Ext4 {
         Ok(())
     }
 
-    #[expect(unused)]
     pub(crate) async fn alloc_inode(
         &self,
         inode_type: FileType,
@@ -513,7 +513,8 @@ impl Ext4 {
             let used_dirs = bg.used_dirs_count();
 
             if free_inodes > 0 {
-                let inode_bitmap_handle = self.get_inode_bitmap_handle(bg_id as u32);
+                let inode_bitmap_handle =
+                    self.get_inode_bitmap_handle(bg_id as u32);
                 let Some(inode_num) =
                     inode_bitmap_handle.find_first(false, self).await?
                 else {
@@ -543,6 +544,15 @@ impl Ext4 {
             bg_id += 1;
         }
         Err(Ext4Error::NoSpace)
+    }
+
+    /// Create a new inode of the given type, and return its index.
+    pub async fn create_inode(
+        &self,
+        options: InodeCreationOptions,
+    ) -> Result<Inode, Ext4Error> {
+        let inode_index = self.alloc_inode(options.file_type).await?;
+        Inode::create(self, inode_index, options).await
     }
 
     /// Read the entire contents of a file into a `Vec<u8>`.
