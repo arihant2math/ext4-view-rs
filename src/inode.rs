@@ -407,7 +407,10 @@ impl Inode {
         i_block.try_into().unwrap()
     }
 
-    pub(crate) fn set_inline_data(&mut self, data: [u8; Self::INLINE_DATA_LEN]) {
+    pub(crate) fn set_inline_data(
+        &mut self,
+        data: [u8; Self::INLINE_DATA_LEN],
+    ) {
         self.inode_data[0x28..0x28 + Self::INLINE_DATA_LEN]
             .copy_from_slice(&data);
     }

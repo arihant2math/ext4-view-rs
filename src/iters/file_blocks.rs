@@ -9,7 +9,7 @@
 mod block_map;
 mod extents_blocks;
 
-use crate::block_index::FsBlockIndex;
+use crate::block_index::{FileBlockIndex, FsBlockIndex};
 use crate::inode::{Inode, InodeFlags};
 use crate::iters::AsyncIterator;
 use crate::{Ext4, Ext4Error};
@@ -52,6 +52,34 @@ impl FileBlocks {
             Self(FileBlocksInner::ExtentsBlocks(_)) => todo!(),
             Self(FileBlocksInner::BlockMap(iter)) => {
                 iter.allocate(inode, amount).await
+            }
+        }
+    }
+
+    #[expect(unused)]
+    pub(crate) async fn free(
+        &mut self,
+        inode: &mut Inode,
+        amount: u32,
+    ) -> Result<(), Ext4Error> {
+        match self {
+            Self(FileBlocksInner::ExtentsBlocks(_)) => todo!(),
+            Self(FileBlocksInner::BlockMap(iter)) => {
+                iter.free(inode, amount).await
+            }
+        }
+    }
+
+    #[expect(unused)]
+    pub(crate) async fn reallocate_hole(
+        &mut self,
+        inode: &mut Inode,
+        index: FileBlockIndex,
+    ) -> Result<(), Ext4Error> {
+        match self {
+            Self(FileBlocksInner::ExtentsBlocks(_)) => todo!(),
+            Self(FileBlocksInner::BlockMap(iter)) => {
+                iter.reallocate_hole(inode, index).await
             }
         }
     }

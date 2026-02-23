@@ -601,6 +601,33 @@ impl Ext4 {
         Err(Ext4Error::NoSpace)
     }
 
+    pub(crate) async fn free_block(
+        &self,
+        block_index: FsBlockIndex,
+    ) -> Result<(), Ext4Error> {
+        let block_group_index =
+            block_index as u64 / self.0.superblock.blocks_per_group() as u64;
+        let block_bitmap_handle =
+            self.get_block_bitmap_handle(block_group_index as u32);
+        let block_offset =
+            block_index % self.0.superblock.blocks_per_group() as u64;
+        block_bitmap_handle
+            .set(block_offset as u32, false, self)
+            .await?;
+        self.update_block_bitmap_checksum(
+            block_group_index as u32,
+            block_bitmap_handle,
+        )
+        .await?;
+
+        let bg = &self.0.block_group_descriptors
+            [usize_from_u32(block_group_index as u32)];
+        bg.set_free_blocks_count(bg.free_blocks_count() + 1);
+        bg.write(self).await?;
+
+        Ok(())
+    }
+
     /// Create a new inode of the given type, and return its index.
     pub async fn create_inode(
         &self,
