@@ -551,6 +551,7 @@ impl Ext4 {
         &self,
         options: InodeCreationOptions,
     ) -> Result<Inode, Ext4Error> {
+        // TODO: for the purposes of fsck, it is proper to write inode data, then mark as used
         let inode_index = self.alloc_inode(options.file_type).await?;
         Inode::create(self, inode_index, options).await
     }
