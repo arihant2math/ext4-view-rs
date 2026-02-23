@@ -6,7 +6,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use ext4_view::{Ext4, Ext4Error, FollowSymlinks, Path};
+use ext4_view::{
+    Ext4, Ext4Error, FileType, FollowSymlinks, InodeCreationOptions,
+    InodeFlags, InodeMode, Path,
+};
 use tokio;
 
 use super::test_util::load_compressed_filesystem;
@@ -224,4 +227,29 @@ async fn test_inode_modification_time() {
         .unwrap();
     assert_eq!(reloaded.metadata().mtime, now);
     assert_eq!(reloaded.metadata().atime, new_atime);
+}
+
+#[tokio::test]
+async fn test_inode_creation() {
+    let fs = load_fs_shared_rw("test_disk1.bin.zst").await;
+
+    // Create a new file in the root directory.
+    let new_inode = fs
+        .create_inode(InodeCreationOptions {
+            file_type: FileType::Regular,
+            mode: InodeMode::S_IRUSR | InodeMode::S_IWUSR | InodeMode::S_IFREG,
+            uid: 0,
+            gid: 0,
+            time: Default::default(),
+            flags: InodeFlags::INLINE_DATA,
+        })
+        .await
+        .unwrap();
+    assert_eq!(new_inode.metadata().file_type, FileType::Regular);
+    assert_eq!(
+        new_inode.metadata().mode,
+        InodeMode::S_IRUSR | InodeMode::S_IWUSR | InodeMode::S_IFREG
+    );
+    assert_eq!(new_inode.metadata().uid, 0);
+    assert_eq!(new_inode.metadata().gid, 0);
 }

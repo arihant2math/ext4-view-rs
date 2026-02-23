@@ -16,7 +16,7 @@ use crate::util::{
     read_u16le, read_u32le, u32_from_hilo, u32_to_hilo, u64_from_hilo,
     u64_to_hilo, usize_from_u32, write_u16le, write_u32le,
 };
-use crate::{Ext4, IncompatibleFeatures};
+use crate::Ext4;
 use alloc::vec;
 use alloc::vec::Vec;
 use bitflags::bitflags;
@@ -28,12 +28,19 @@ use core::time::Duration;
 /// This is always nonzero.
 pub(crate) type InodeIndex = NonZeroU32;
 
+/// Options for creating a new inode.
 pub struct InodeCreationOptions {
+    /// File type of the new inode.
     pub file_type: FileType,
+    /// Mode bits of the new inode, should match file type.
     pub mode: InodeMode,
+    /// User ID of the new inode.
     pub uid: u32,
+    /// Group ID of the new inode.
     pub gid: u32,
+    /// Creation, modification, and access time of the new inode.
     pub time: Duration,
+    /// Inode flags for the new inode. EXTENTS is not supported and will be ignored if set.
     pub flags: InodeFlags,
 }
 
@@ -76,30 +83,49 @@ bitflags! {
     /// file type in the upper bits.
     #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     pub struct InodeMode: u16 {
+        /// Other execute permission.
         const S_IXOTH = 0x0001;
+        /// Other write permission.
         const S_IWOTH = 0x0002;
+        /// Other read permission.
         const S_IROTH = 0x0004;
 
+        /// Group execute permission.
         const S_IXGRP = 0x0008;
+        /// Group write permission.
         const S_IWGRP = 0x0010;
+        /// Group read permission.
         const S_IRGRP = 0x0020;
 
+        /// User execute permission.
         const S_IXUSR = 0x0040;
+        /// User write permission.
         const S_IWUSR = 0x0080;
+        /// User read permission.
         const S_IRUSR = 0x0100;
 
+        /// Sticky bit.
         const S_ISVTX = 0x0200;
 
+        /// Setgid bit.
         const S_ISGID = 0x0400;
+        /// Setuid bit.
         const S_ISUID = 0x0800;
 
         // Mutually-exclusive file types:
+        /// Named pipe (FIFO).
         const S_IFIFO = 0x1000;
+        /// Character device.
         const S_IFCHR = 0x2000;
+        /// Directory.
         const S_IFDIR = 0x4000;
+        /// Block device.
         const S_IFBLK = 0x6000;
+        /// Regular file.
         const S_IFREG = 0x8000;
+        /// Symbolic link.
         const S_IFLNK = 0xA000;
+        /// Socket.
         const S_IFSOCK = 0xC000;
     }
 }
@@ -243,17 +269,8 @@ impl Inode {
         inode.set_dtime(Duration::from_secs(0));
         inode.set_links_count(0);
         let mut flags = inode_creation_data.flags;
-        if ext4
-            .0
-            .superblock
-            .incompatible_features()
-            .contains(IncompatibleFeatures::EXTENTS)
-        {
-            flags.insert(InodeFlags::EXTENTS);
-            todo!("Initialize extent tree for new inode");
-        } else {
-            flags.remove(InodeFlags::EXTENTS);
-        }
+        // TODO: Support extents
+        flags.remove(InodeFlags::EXTENTS);
         inode.set_flags(flags);
         inode.write(ext4).await?;
         Ok(inode)
