@@ -63,6 +63,38 @@ impl ExtentsBlocks {
         })
     }
 
+    pub(crate) async fn allocate(
+        &mut self,
+        _inode: &mut Inode,
+        _amount: u32,
+    ) -> Result<(), Ext4Error> {
+        Err(Ext4Error::Readonly)
+    }
+
+    pub(crate) async fn free(
+        &mut self,
+        _inode: &mut Inode,
+        _amount: u32,
+    ) -> Result<(), Ext4Error> {
+        Err(Ext4Error::Readonly)
+    }
+
+    pub(crate) async fn reallocate_hole(
+        &mut self,
+        _inode: &mut Inode,
+        _index: FileBlockIndex,
+    ) -> Result<(), Ext4Error> {
+        Err(Ext4Error::Readonly)
+    }
+
+    pub(crate) async fn allocate_hole(
+        &mut self,
+        _inode: &mut Inode,
+        _amount: u32,
+    ) -> Result<(), Ext4Error> {
+        Err(Ext4Error::Readonly)
+    }
+
     async fn next_impl(&mut self) -> Result<Option<FsBlockIndex>, Ext4Error> {
         if self.block_within_file >= self.num_blocks_total {
             self.is_done = true;

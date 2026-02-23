@@ -200,67 +200,82 @@ impl File {
         Ok(buf.len())
     }
 
-    /// Truncate or extend the file to `new_size` without allocating or deallocating blocks.
+    /// Truncate or extend the file to `new_size`.
     ///
-    /// - Shrinking succeeds only if it does not require freeing any blocks (i.e., stays within
-    ///   the same last allocated block).
-    /// - Growing succeeds only if it does not require allocating new blocks (i.e., the target
-    ///   position lies within already allocated blocks or holes are not introduced).
+    /// This may allocate or deallocate blocks as needed using the allocation helpers
+    /// in [`FileBlocks`].
     pub async fn truncate(&mut self, new_size: u64) -> Result<(), Ext4Error> {
-        let block_size = self.fs.0.superblock.block_size();
+        let block_size = self.fs.0.superblock.block_size().to_nz_u64();
+        let curr_size = self.inode.size_in_bytes();
 
         // Fast path: no change.
-        if new_size == self.inode.size_in_bytes() {
+        if new_size == curr_size {
             return Ok(());
         }
 
-        async fn block_for_position(
-            fs: &Ext4,
-            inode: &Inode,
-            pos: u64,
-        ) -> Result<Option<FsBlockIndex>, Ext4Error> {
-            if pos == 0 {
-                return Ok(None);
+        // How many blocks are needed to represent a file of `size` bytes?
+        // This is ceil(size / block_size) with the special-case that size==0 => 0.
+        fn blocks_for_size(size: u64, block_size: u64) -> u32 {
+            if size == 0 {
+                return 0;
             }
-            let block_size = fs.0.superblock.block_size();
-            let mut it = FileBlocks::new(fs.clone(), inode)?;
-            #[expect(
-                clippy::arithmetic_side_effects,
-                reason = "We check for pos == 0 above"
-            )]
-            let num_blocks = (pos - 1) / block_size.to_nz_u64();
-            for _ in 0..num_blocks {
-                // Advance ignoring value; EOF handled when pos exceeds file mapping.
-                it.next().await;
-            }
-            match it.next().await {
-                Some(res) => Ok(Some(res?)),
-                None => Ok(Some(0)), // Past mapped blocks -> implies deallocation would be required
-            }
+            // ceil div: (size + block_size - 1) / block_size
+            let blocks = (size + (block_size - 1)) / block_size;
+            u32::try_from(blocks).unwrap_or(u32::MAX)
         }
 
-        let curr_size = self.inode.size_in_bytes();
+        let curr_blocks = blocks_for_size(curr_size, block_size.get());
+        let new_blocks = blocks_for_size(new_size, block_size.get());
+
+        // Reset iteration state; truncation changes the mapping.
+        self.file_blocks = FileBlocks::new(self.fs.clone(), &self.inode)?;
+        self.block_index = None;
+
         if new_size < curr_size {
-            // ensure we do not cross a block boundary in a way that would free blocks.
-            let curr_block_num = curr_size / block_size.to_nz_u64();
-            let new_block_num = new_size / block_size.to_nz_u64();
-            if curr_block_num != new_block_num {
-                return Err(Ext4Error::Readonly);
+            // Shrink: free blocks at the end if necessary.
+            if new_blocks < curr_blocks {
+                let to_free = curr_blocks - new_blocks;
+                self.file_blocks.free(&mut self.inode, to_free).await?;
             }
-            // Within same block: just update size metadata.
+
             self.inode.set_size_in_bytes(new_size);
-            self.inode.write(&self.fs).await
+            self.inode.write(&self.fs).await?;
+
+            // If our current position is now past EOF, clamp it.
+            if self.position > new_size {
+                self.position = new_size;
+            }
+
+            // Re-seek to rebuild iterator state relative to the (possibly clamped) position.
+            self.seek_to(self.position).await?;
+
+            Ok(())
         } else {
-            // Grow: ensure target lies within already allocated blocks (no allocation).
-            let target_block =
-                block_for_position(&self.fs, &self.inode, new_size).await?;
-            // If target_block is Some(0) -> hole or beyond mapping; allocation would be needed.
-            if matches!(target_block, Some(0)) {
-                return Err(Ext4Error::Readonly);
+            // Grow: allocate blocks if necessary, and ensure any intermediate holes
+            // between the old EOF and the new EOF are backed by blocks.
+            if new_blocks > curr_blocks {
+                let to_alloc = new_blocks - curr_blocks;
+                self.file_blocks.allocate(&mut self.inode, to_alloc).await?;
             }
-            // Otherwise permitted: update size metadata only.
+
+            // If old EOF ended mid-block and we're growing, we may be extending into
+            // blocks that were previously considered "holes" by the block map. Ensure
+            // holes up to the new EOF are reallocated.
+            //
+            // We do this conservatively for all file-block indices that fall within
+            // [curr_blocks, new_blocks). If they are already allocated, reallocation
+            // should be a no-op in the underlying implementation.
+            for i in curr_blocks..new_blocks {
+                self.file_blocks.reallocate_hole(&mut self.inode, i).await?;
+            }
+
             self.inode.set_size_in_bytes(new_size);
-            self.inode.write(&self.fs).await
+            self.inode.write(&self.fs).await?;
+
+            // Re-seek to keep iteration state consistent with current position.
+            self.seek_to(self.position).await?;
+
+            Ok(())
         }
     }
 
@@ -277,31 +292,54 @@ impl File {
         }
 
         let block_size = self.fs.0.superblock.block_size();
+        let block_size_u64 = block_size.to_nz_u64();
+
+        // Ensure the file is large enough for the maximum position we might write.
+        // This will allocate blocks as needed.
+        let end_pos = self
+            .position
+            .checked_add(u64::try_from(buf.len()).unwrap_or(u64::MAX))
+            .unwrap_or(u64::MAX);
+        if end_pos > self.inode.size_in_bytes() {
+            self.truncate(end_pos).await?;
+            // `truncate` resets iterator state; ensure we're positioned correctly.
+            self.seek_to(self.position).await?;
+        }
 
         // Get the block to write to.
         let block_index = if let Some(block_index) = self.block_index {
             block_index
         } else {
-            // Fetch next block from iterator; if at EOF in mapping this may be None.
-            let next = self.file_blocks.next().await;
-            match next {
-                Some(res) => {
-                    let block_index = res?;
-                    self.block_index = Some(block_index);
-                    block_index
-                }
-                None => 0,
-            }
+            // OK to unwrap: after ensuring size above, the mapping must contain a block.
+            let block_index = self.file_blocks.next().await.unwrap()?;
+            self.block_index = Some(block_index);
+            block_index
         };
 
-        // Refuse to write into holes or beyond mapped blocks; scope is only allocated blocks.
+        // If the iterator yields a hole, allocate it and restart iteration at this position.
         if block_index == 0 {
-            return Err(Ext4Error::Readonly);
+            let file_block_index =
+                u32::try_from(self.position / block_size_u64).unwrap();
+            self.file_blocks
+                .reallocate_hole(&mut self.inode, file_block_index)
+                .await?;
+            // Rebuild iterator state and fetch the block again.
+            self.seek_to(self.position).await?;
+            let block_index = self.file_blocks.next().await.unwrap()?;
+            self.block_index = Some(block_index);
+        }
+
+        // Now we must have a real block index.
+        let block_index = self.block_index.unwrap();
+        if block_index == 0 {
+            return Err(
+                crate::error::CorruptKind::DirEntry(self.inode.index).into()
+            );
         }
 
         // Offset within the current block.
         let offset_within_block: u32 =
-            u32::try_from(self.position % block_size.to_nz_u64()).unwrap();
+            u32::try_from(self.position % block_size_u64).unwrap();
 
         // Cap write to remaining bytes in this block.
         let bytes_remaining_in_block: u32 = block_size
@@ -328,13 +366,6 @@ impl File {
         }
         let new_position = self.position.checked_add(write_len as u64).unwrap();
         self.position = new_position;
-
-        // If we extended past previous EOF, update inode size without allocating.
-        if new_position > self.inode.size_in_bytes() {
-            self.inode.set_size_in_bytes(new_position);
-            // Persist the inode metadata update.
-            self.inode.write(&self.fs).await?;
-        }
 
         Ok(write_len)
     }

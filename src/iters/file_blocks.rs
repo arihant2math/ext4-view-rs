@@ -42,42 +42,45 @@ impl FileBlocks {
         }
     }
 
-    #[expect(unused)]
     pub(crate) async fn allocate(
         &mut self,
         inode: &mut Inode,
         amount: u32,
     ) -> Result<(), Ext4Error> {
         match self {
-            Self(FileBlocksInner::ExtentsBlocks(_)) => todo!(),
+            Self(FileBlocksInner::ExtentsBlocks(iter)) => {
+                iter.allocate(inode, amount).await
+            }
             Self(FileBlocksInner::BlockMap(iter)) => {
                 iter.allocate(inode, amount).await
             }
         }
     }
 
-    #[expect(unused)]
     pub(crate) async fn free(
         &mut self,
         inode: &mut Inode,
         amount: u32,
     ) -> Result<(), Ext4Error> {
         match self {
-            Self(FileBlocksInner::ExtentsBlocks(_)) => todo!(),
+            Self(FileBlocksInner::ExtentsBlocks(iter)) => {
+                iter.free(inode, amount).await
+            }
             Self(FileBlocksInner::BlockMap(iter)) => {
                 iter.free(inode, amount).await
             }
         }
     }
 
-    #[expect(unused)]
     pub(crate) async fn reallocate_hole(
         &mut self,
         inode: &mut Inode,
         index: FileBlockIndex,
     ) -> Result<(), Ext4Error> {
         match self {
-            Self(FileBlocksInner::ExtentsBlocks(_)) => todo!(),
+            Self(FileBlocksInner::ExtentsBlocks(iter)) => {
+                iter.reallocate_hole(inode, index).await
+            }
             Self(FileBlocksInner::BlockMap(iter)) => {
                 iter.reallocate_hole(inode, index).await
             }
@@ -91,7 +94,9 @@ impl FileBlocks {
         amount: u32,
     ) -> Result<(), Ext4Error> {
         match self {
-            Self(FileBlocksInner::ExtentsBlocks(_)) => todo!(),
+            Self(FileBlocksInner::ExtentsBlocks(iter)) => {
+                iter.allocate_hole(inode, amount).await
+            }
             Self(FileBlocksInner::BlockMap(iter)) => {
                 iter.allocate_hole(inode, amount).await
             }
