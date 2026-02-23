@@ -243,17 +243,8 @@ impl Inode {
         inode.set_dtime(Duration::from_secs(0));
         inode.set_links_count(0);
         let mut flags = inode_creation_data.flags;
-        if ext4
-            .0
-            .superblock
-            .incompatible_features()
-            .contains(IncompatibleFeatures::EXTENTS)
-        {
-            flags.insert(InodeFlags::EXTENTS);
-            todo!("Initialize extent tree for new inode");
-        } else {
-            flags.remove(InodeFlags::EXTENTS);
-        }
+        // TODO: Support extent inodes
+        flags.remove(InodeFlags::EXTENTS);
         inode.set_flags(flags);
         inode.write(ext4).await?;
         Ok(inode)

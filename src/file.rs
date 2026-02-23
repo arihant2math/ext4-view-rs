@@ -204,7 +204,7 @@ impl File {
     ///
     /// This may allocate or deallocate blocks as needed using the allocation helpers
     /// in [`FileBlocks`].
-    pub async fn truncate(&mut self, new_size: u64) -> Result<(), Ext4Error> {
+    pub async fn resize(&mut self, new_size: u64) -> Result<(), Ext4Error> {
         let block_size = self.fs.0.superblock.block_size().to_nz_u64();
         let curr_size = self.inode.size_in_bytes();
 
@@ -261,12 +261,8 @@ impl File {
             // If old EOF ended mid-block and we're growing, we may be extending into
             // blocks that were previously considered "holes" by the block map. Ensure
             // holes up to the new EOF are reallocated.
-            //
-            // We do this conservatively for all file-block indices that fall within
-            // [curr_blocks, new_blocks). If they are already allocated, reallocation
-            // should be a no-op in the underlying implementation.
             for i in curr_blocks..new_blocks {
-                self.file_blocks.reallocate_hole(&mut self.inode, i).await?;
+                self.file_blocks.allocate(&mut self.inode, i).await?;
             }
 
             self.inode.set_size_in_bytes(new_size);
@@ -301,7 +297,7 @@ impl File {
             .checked_add(u64::try_from(buf.len()).unwrap_or(u64::MAX))
             .unwrap_or(u64::MAX);
         if end_pos > self.inode.size_in_bytes() {
-            self.truncate(end_pos).await?;
+            self.resize(end_pos).await?;
             // `truncate` resets iterator state; ensure we're positioned correctly.
             self.seek_to(self.position).await?;
         }

@@ -498,8 +498,8 @@ impl BlockMap {
         if id_in_file >= self.num_blocks_total {
             return Err(Ext4Error::FileTooLarge); // TODO: Better error
         }
-        if self.get(id_in_file).await?.is_some() {
-            return Err(Ext4Error::NoSpace); // TODO: Better error
+        if self.get(id_in_file).await?.is_some_and(|id| id != 0) {
+            unreachable!("The block '{id_in_file}' is not a hole");
         }
         let id = self.fs.alloc_block(inode).await?;
         match BlockLocation::new(id_in_file) {
