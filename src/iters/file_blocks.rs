@@ -83,6 +83,20 @@ impl FileBlocks {
             }
         }
     }
+
+    #[expect(unused)]
+    pub(crate) async fn allocate_hole(
+        &mut self,
+        inode: &mut Inode,
+        amount: u32,
+    ) -> Result<(), Ext4Error> {
+        match self {
+            Self(FileBlocksInner::ExtentsBlocks(_)) => todo!(),
+            Self(FileBlocksInner::BlockMap(iter)) => {
+                iter.allocate_hole(inode, amount).await
+            }
+        }
+    }
 }
 
 impl AsyncIterator for FileBlocks {

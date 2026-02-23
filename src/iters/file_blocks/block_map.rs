@@ -272,8 +272,11 @@ impl BlockMap {
         }
     }
 
-    async fn allocate_one(&mut self, inode: &Inode) -> Result<(), Ext4Error> {
-        let id = self.fs.alloc_block(inode).await?;
+    async fn allocate_one_inner(
+        &mut self,
+        inode: &Inode,
+        id: FsBlockIndex,
+    ) -> Result<(), Ext4Error> {
         match BlockLocation::new(self.num_blocks_total) {
             BlockLocation::Direct(i) => {
                 self.level_0[i as usize] = id
@@ -344,6 +347,11 @@ impl BlockMap {
             self.is_done = false;
         }
         Ok(())
+    }
+
+    async fn allocate_one(&mut self, inode: &Inode) -> Result<(), Ext4Error> {
+        let id = self.fs.alloc_block(inode).await?;
+        self.allocate_one_inner(inode, id).await
     }
 
     pub(crate) async fn allocate(
@@ -555,6 +563,23 @@ impl BlockMap {
                 }
             }
             _ => todo!(),
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn allocate_hole(
+        &mut self,
+        inode: &mut Inode,
+        amount: u32,
+    ) -> Result<(), Ext4Error> {
+        if self.num_blocks_total.checked_add(amount).is_none() {
+            return Err(Ext4Error::FileTooLarge);
+        }
+        for _ in 0..amount {
+            self.allocate_one_inner(inode, 0).await?;
+        }
+        if self.is_done && self.num_blocks_yielded < self.num_blocks_total {
+            self.is_done = false;
         }
         Ok(())
     }
