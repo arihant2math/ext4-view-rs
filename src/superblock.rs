@@ -353,8 +353,8 @@ fn check_incompat_features(
 
 #[cfg(test)]
 mod tests {
-    use core::num::NonZero;
     use super::*;
+    use core::num::NonZero;
 
     #[test]
     fn test_superblock() {
