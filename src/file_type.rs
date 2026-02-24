@@ -50,6 +50,18 @@ impl FileType {
         }
     }
 
+    pub(crate) fn to_dir_entry(self) -> u8 {
+        match self {
+            Self::Regular => 1,
+            Self::Directory => 2,
+            Self::CharacterDevice => 3,
+            Self::BlockDevice => 4,
+            Self::Fifo => 5,
+            Self::Socket => 6,
+            Self::Symlink => 7,
+        }
+    }
+
     /// Returns true if the file is a block device.
     #[must_use]
     pub fn is_block_dev(self) -> bool {
