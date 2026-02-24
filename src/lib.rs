@@ -930,16 +930,13 @@ impl Ext4 {
     /// * `path` is not absolute.
     /// * The parent directory does not exist or is not a directory.
     /// * The operation would require allocating a block (returns [`Ext4Error::Readonly`]).
-    pub async fn link<'p, P>(
+    pub async fn link(
         &self,
         parent_inode: &Inode,
         name: String,
         inode: &mut Inode,
         file_type: FileType,
-    ) -> Result<(), Ext4Error>
-    where
-        P: TryInto<Path<'p>>,
-    {
+    ) -> Result<(), Ext4Error> {
         if !parent_inode.file_type().is_dir() {
             return Err(Ext4Error::NotADirectory);
         }
@@ -982,15 +979,12 @@ impl Ext4 {
     /// * The parent directory does not exist or is not a directory.
     /// * The operation would require freeing an inode (i.e. the target inode has `nlinks == 1`)
     ///   (returns [`Ext4Error::Readonly`]).
-    pub async fn unlink<'p, P>(
+    pub async fn unlink(
         &self,
         parent_inode: &Inode,
         name: String,
         inode: &mut Inode,
-    ) -> Result<(), Ext4Error>
-    where
-        P: TryInto<Path<'p>>,
-    {
+    ) -> Result<(), Ext4Error> {
         if !parent_inode.file_type().is_dir() {
             return Err(Ext4Error::NotADirectory);
         }
