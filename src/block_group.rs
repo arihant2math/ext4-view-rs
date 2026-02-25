@@ -232,14 +232,14 @@ impl BlockGroupDescriptor {
         let (block_bitmap_checksum_hi, block_bitmap_checksum_lo) =
             u32_to_hilo(match &self.block_bitmap_checksum {
                 AtomicTruncatedChecksum::Truncated(c) => {
-                    c.load(Ordering::Relaxed) as u32
+                    u32::from(c.load(Ordering::Relaxed))
                 }
                 AtomicTruncatedChecksum::Full(c) => c.load(Ordering::Relaxed),
             });
         let (inode_bitmap_checksum_hi, inode_bitmap_checksum_lo) =
             u32_to_hilo(match &self.inode_bitmap_checksum {
                 AtomicTruncatedChecksum::Truncated(c) => {
-                    c.load(Ordering::Relaxed) as u32
+                    u32::from(c.load(Ordering::Relaxed))
                 }
                 AtomicTruncatedChecksum::Full(c) => c.load(Ordering::Relaxed),
             });

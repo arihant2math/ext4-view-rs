@@ -254,7 +254,7 @@ impl Ext4 {
     /// Get the filesystem label.
     #[must_use]
     pub fn label(&self) -> &Label {
-        &self.0.superblock.label()
+        self.0.superblock.label()
     }
 
     /// Get the filesystem UUID.
@@ -631,7 +631,7 @@ impl Ext4 {
         block_index: FsBlockIndex,
     ) -> Result<(), Ext4Error> {
         assert_ne!(block_index, 0);
-        let block_group_index = u64::from(block_index)
+        let block_group_index = block_index
             / NonZeroU64::from(self.0.superblock.blocks_per_group());
         let block_bitmap_handle =
             self.get_block_bitmap_handle(block_group_index as u32);
@@ -1051,7 +1051,7 @@ impl Ext4 {
             mut inode: Inode,
         ) -> Result<Option<Inode>, Ext4Error> {
             let old = inode.links_count();
-            inode.set_links_count(old - 1);
+            inode.set_links_count(old.saturating_sub(1));
             inode.write(fs).await?;
             let name = DirEntryName::try_from(name.as_str())
                 .map_err(|_| Ext4Error::MalformedPath)?;
