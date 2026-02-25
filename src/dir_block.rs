@@ -11,7 +11,7 @@ use crate::block_index::FsBlockIndex;
 use crate::checksum::Checksum;
 use crate::error::{CorruptKind, Ext4Error};
 use crate::inode::InodeIndex;
-use crate::util::{read_u16le, read_u32le};
+use crate::util::{read_u16le, read_u32le, write_u32le};
 
 #[derive(Debug, Eq, PartialEq)]
 enum DirBlockType {
@@ -76,6 +76,36 @@ impl DirBlock<'_> {
         } else {
             Err(CorruptKind::DirBlockChecksum(self.dir_inode).into())
         }
+    }
+
+    /// Update the directory block checksum in-place.
+    ///
+    /// This is needed after mutating directory entries in an existing block
+    /// (e.g. add/remove in a non-htree directory).
+    pub(crate) fn update_checksum(
+        &self,
+        block: &mut [u8],
+    ) -> Result<(), Ext4Error> {
+        let block_size = self.fs.0.superblock.block_size();
+        assert_eq!(block.len(), block_size);
+
+        if !self.fs.has_metadata_checksums() {
+            return Ok(());
+        }
+
+        let block_type = self.get_block_type(block);
+
+        let checksum = if block_type == DirBlockType::Leaf {
+            self.calc_leaf_checksum(block)
+        } else {
+            self.calc_internal_checksum(block, block_type)
+        };
+
+        // Stored in the last four bytes of the block.
+        let offset = block.len().checked_sub(4).unwrap();
+        write_u32le(block, offset, checksum.finalize());
+
+        Ok(())
     }
 
     /// Get the stored checksum from the last four bytes of the block.

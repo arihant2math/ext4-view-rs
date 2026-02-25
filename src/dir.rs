@@ -7,6 +7,7 @@
 // except according to those terms.
 
 use crate::Ext4;
+use crate::dir_block::DirBlock;
 use crate::dir_entry::DirEntryName;
 use crate::dir_htree::get_dir_entry_via_htree;
 use crate::error::{CorruptKind, Ext4Error};
@@ -162,15 +163,19 @@ pub(crate) async fn add_dir_entry_non_htree(
                     file_type,
                 )?;
 
+                // If metadata checksums are enabled, update the directory block checksum tail.
+                DirBlock {
+                    fs,
+                    block_index,
+                    is_first,
+                    dir_inode: dir_inode.index,
+                    has_htree: false,
+                    checksum_base: dir_inode.checksum_base().clone(),
+                }
+                .update_checksum(&mut block_buf)?;
+
                 // Write the block back.
                 fs.write_to_block(block_index, 0, &block_buf).await?;
-
-                // Non-htree directories have no per-block checksum tail we update here.
-                // If metadata checksums are enabled, this write may make the on-disk
-                // checksum inconsistent. This crate currently doesn't provide an API
-                // to update directory block checksums in-place for leaf blocks, so
-                // treat this as acceptable for now.
-                let _ = is_first;
                 return Ok(());
             }
 
@@ -206,6 +211,8 @@ pub(crate) async fn remove_dir_entry_non_htree(
     let block_size = fs.0.superblock.block_size().to_usize();
     let mut file_blocks = FileBlocks::new(fs.clone(), dir_inode)?;
     let mut block_buf = vec![0u8; block_size];
+
+    let mut is_first = true;
 
     while let Some(block_index_res) = file_blocks.next().await {
         let block_index = block_index_res?;
@@ -257,6 +264,17 @@ pub(crate) async fn remove_dir_entry_non_htree(
                         write_u32le(&mut block_buf, off, 0);
                     }
 
+                    // If metadata checksums are enabled, update the directory block checksum tail.
+                    DirBlock {
+                        fs,
+                        block_index,
+                        is_first,
+                        dir_inode: dir_inode.index,
+                        has_htree: false,
+                        checksum_base: dir_inode.checksum_base().clone(),
+                    }
+                    .update_checksum(&mut block_buf)?;
+
                     fs.write_to_block(block_index, 0, &block_buf).await?;
                     return Ok(());
                 }
@@ -265,6 +283,8 @@ pub(crate) async fn remove_dir_entry_non_htree(
             prev_off = Some(off);
             off += rec_len_usize;
         }
+
+        is_first = false;
     }
 
     Err(Ext4Error::NotFound)
