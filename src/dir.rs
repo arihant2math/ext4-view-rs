@@ -17,8 +17,8 @@ use crate::iters::AsyncIterator;
 use crate::iters::file_blocks::FileBlocks;
 use crate::iters::read_dir::ReadDir;
 use crate::path::PathBuf;
-use crate::util::write_u16le;
 use crate::util::write_u32le;
+use crate::util::{read_u16le, read_u32le, write_u16le};
 use alloc::vec;
 
 /// Search a directory inode for an entry with the given `name`. If
@@ -97,8 +97,8 @@ pub(crate) async fn add_dir_entry_non_htree(
         // Walk entries in this block looking for usable slack space.
         let mut off = 0usize;
         while off < block_size {
-            let inode_field = read_u32_le(&block_buf, off)?;
-            let rec_len = read_u16_le(&block_buf, off + 4)?;
+            let inode_field = read_u32le(&block_buf, off);
+            let rec_len = read_u16le(&block_buf, off + 4);
             let rec_len_usize = usize::from(rec_len);
 
             if rec_len_usize < 8 || off.checked_add(rec_len_usize).is_none() {
@@ -222,8 +222,8 @@ pub(crate) async fn remove_dir_entry_non_htree(
         let mut prev_off: Option<usize> = None;
 
         while off < block_size {
-            let inode_field = read_u32_le(&block_buf, off)?;
-            let rec_len = read_u16_le(&block_buf, off + 4)?;
+            let inode_field = read_u32le(&block_buf, off);
+            let rec_len = read_u16le(&block_buf, off + 4);
             let rec_len_usize = usize::from(rec_len);
 
             if rec_len_usize < 8 || off + rec_len_usize > block_size {
@@ -246,7 +246,7 @@ pub(crate) async fn remove_dir_entry_non_htree(
 
                     if let Some(poff) = prev_off {
                         // Merge into previous record by extending its rec_len.
-                        let prev_rec_len = read_u16_le(&block_buf, poff + 4)?;
+                        let prev_rec_len = read_u16le(&block_buf, poff + 4);
                         let new_len = usize::from(prev_rec_len) + rec_len_usize;
                         write_u16le(
                             &mut block_buf,
@@ -335,32 +335,6 @@ fn write_dir_entry_bytes(
     }
 
     Ok(())
-}
-
-fn read_u16_le(buf: &[u8], off: usize) -> Result<u16, Ext4Error> {
-    let b0 = *buf.get(off).ok_or_else(|| {
-        Ext4Error::from(CorruptKind::DirEntry(InodeIndex::new(1).unwrap()))
-    })?;
-    let b1 = *buf.get(off + 1).ok_or_else(|| {
-        Ext4Error::from(CorruptKind::DirEntry(InodeIndex::new(1).unwrap()))
-    })?;
-    Ok(u16::from_le_bytes([b0, b1]))
-}
-
-fn read_u32_le(buf: &[u8], off: usize) -> Result<u32, Ext4Error> {
-    let b0 = *buf.get(off).ok_or_else(|| {
-        Ext4Error::from(CorruptKind::DirEntry(InodeIndex::new(1).unwrap()))
-    })?;
-    let b1 = *buf.get(off + 1).ok_or_else(|| {
-        Ext4Error::from(CorruptKind::DirEntry(InodeIndex::new(1).unwrap()))
-    })?;
-    let b2 = *buf.get(off + 2).ok_or_else(|| {
-        Ext4Error::from(CorruptKind::DirEntry(InodeIndex::new(1).unwrap()))
-    })?;
-    let b3 = *buf.get(off + 3).ok_or_else(|| {
-        Ext4Error::from(CorruptKind::DirEntry(InodeIndex::new(1).unwrap()))
-    })?;
-    Ok(u32::from_le_bytes([b0, b1, b2, b3]))
 }
 
 #[cfg(feature = "std")]
