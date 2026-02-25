@@ -102,6 +102,9 @@ pub enum Ext4Error {
 
     /// No space to perform operation
     NoSpace,
+
+    /// Already exists
+    AlreadyExists,
 }
 
 impl Ext4Error {
@@ -142,6 +145,7 @@ impl Display for Ext4Error {
             Self::Corrupt(c) => write!(f, "corrupt filesystem: {c}"),
             Self::Readonly => write!(f, "filesystem is read-only"),
             Self::NoSpace => write!(f, "no space left on device"),
+            Self::AlreadyExists => write!(f, "file already exists"),
         }
     }
 }
@@ -175,6 +179,7 @@ impl From<Ext4Error> for std::io::Error {
             Ext4Error::Readonly => PermissionDenied.into(),
             // TODO: Fix
             Ext4Error::NoSpace => Self::other(e),
+            Ext4Error::AlreadyExists => AlreadyExists.into(),
         }
     }
 }

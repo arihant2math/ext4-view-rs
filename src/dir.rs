@@ -54,7 +54,7 @@ pub async fn get_dir_entry_inode_by_name(
     Err(Ext4Error::NotFound)
 }
 
-/// Add an item to a directory **without** an htree.
+/// Add an item to a directory without an htree.
 ///
 /// This edits directory entry bytes in-place and will error with
 /// [`Ext4Error::Readonly`] if it would require allocating a new block.
@@ -79,9 +79,7 @@ pub(crate) async fn add_dir_entry_non_htree(
         .await
         .is_ok()
     {
-        // The crate doesn't currently have a dedicated "already exists"
-        // error variant.
-        return Err(Ext4Error::Readonly);
+        return Err(Ext4Error::AlreadyExists);
     }
 
     let block_size = fs.0.superblock.block_size().to_usize();
@@ -186,7 +184,7 @@ pub(crate) async fn add_dir_entry_non_htree(
     Err(Ext4Error::Readonly)
 }
 
-/// Remove an item from a directory **without** an htree.
+/// Remove an item from a directory without an htree.
 ///
 /// This edits directory entry bytes in-place. It will error with
 /// [`Ext4Error::Readonly`] if the removal would require freeing a block

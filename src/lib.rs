@@ -955,7 +955,7 @@ impl Ext4 {
                 .map_err(|_| Ext4Error::MalformedPath)?;
             dir::add_dir_entry_non_htree(
                 fs,
-                &parent_inode,
+                parent_inode,
                 name,
                 inode.index,
                 file_type,
@@ -1003,7 +1003,7 @@ impl Ext4 {
             inode.write(fs).await?;
             let name = DirEntryName::try_from(name.as_str())
                 .map_err(|_| Ext4Error::MalformedPath)?;
-            dir::remove_dir_entry_non_htree(fs, &parent_inode, name).await?;
+            dir::remove_dir_entry_non_htree(fs, parent_inode, name).await?;
             Ok(())
         }
 
