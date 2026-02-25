@@ -266,6 +266,7 @@ async fn test_inode_creation() {
         .await
         .unwrap();
     assert_eq!(new_file_inode.index, new_inode.index);
+    assert_eq!(new_file_inode.links_count(), 1);
 }
 
 #[tokio::test]
