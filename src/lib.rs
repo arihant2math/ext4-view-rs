@@ -145,18 +145,18 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use bitmap::BitmapHandle;
-use block_group::BlockGroupDescriptor;
+use block_group::{BlockGroupDescriptor, BlockGroupIndex};
 use block_index::FsBlockIndex;
 use core::fmt::{self, Debug, Formatter};
 use core::num::NonZeroU64;
 use error::CorruptKind;
 use features::ReadOnlyCompatibleFeatures;
 use inode::InodeIndex;
+use iters::file_blocks::FileBlocks;
 use journal::Journal;
 use superblock::Superblock;
 use util::usize_from_u32;
 
-use crate::iters::file_blocks::FileBlocks;
 pub use dir::get_dir_entry_inode_by_name;
 pub use dir_entry::{DirEntry, DirEntryName, DirEntryNameError};
 pub use error::{Corrupt, Ext4Error, Incompatible};
@@ -412,13 +412,13 @@ impl Ext4 {
         Ok(())
     }
 
-    fn get_block_bitmap_handle(&self, block_group_index: u32) -> BitmapHandle {
+    fn get_block_bitmap_handle(&self, block_group_index: BlockGroupIndex) -> BitmapHandle {
         let block_group =
             &self.0.block_group_descriptors[usize_from_u32(block_group_index)];
         BitmapHandle::new(block_group.block_bitmap_block())
     }
 
-    fn get_inode_bitmap_handle(&self, block_group_index: u32) -> BitmapHandle {
+    fn get_inode_bitmap_handle(&self, block_group_index: BlockGroupIndex) -> BitmapHandle {
         let block_group =
             &self.0.block_group_descriptors[usize_from_u32(block_group_index)];
         BitmapHandle::new(block_group.inode_bitmap_block())
@@ -426,7 +426,7 @@ impl Ext4 {
 
     async fn update_block_bitmap_checksum(
         &self,
-        block_group_index: u32,
+        block_group_index: BlockGroupIndex,
         bitmap_handle: BitmapHandle,
     ) -> Result<(), Ext4Error> {
         let checksum = bitmap_handle.calc_checksum(self).await?;
@@ -440,7 +440,7 @@ impl Ext4 {
 
     async fn update_inode_bitmap_checksum(
         &self,
-        block_group_index: u32,
+        block_group_index: BlockGroupIndex,
         bitmap_handle: BitmapHandle,
     ) -> Result<(), Ext4Error> {
         let checksum = bitmap_handle.calc_checksum(self).await?;
