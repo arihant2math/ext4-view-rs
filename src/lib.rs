@@ -156,6 +156,7 @@ use journal::Journal;
 use superblock::Superblock;
 use util::usize_from_u32;
 
+use crate::iters::file_blocks::FileBlocks;
 pub use dir::get_dir_entry_inode_by_name;
 pub use dir_entry::{DirEntry, DirEntryName, DirEntryNameError};
 pub use error::{Corrupt, Ext4Error, Incompatible};
@@ -466,27 +467,6 @@ impl Ext4 {
         bitmap_handle.query(block_offset as u32, self).await
     }
 
-    #[expect(unused)]
-    async fn mark_block(
-        &self,
-        block_index: FsBlockIndex,
-        used: bool,
-    ) -> Result<(), Ext4Error> {
-        let block_group_index = u64::from(block_index)
-            / NonZeroU64::from(self.0.superblock.blocks_per_group());
-        let bitmap_handle =
-            self.get_block_bitmap_handle(block_group_index as u32);
-        let block_offset =
-            block_index % u64::from(self.0.superblock.blocks_per_group().get());
-        bitmap_handle.set(block_offset as u32, used, self).await?;
-        self.update_block_bitmap_checksum(
-            block_group_index as u32,
-            bitmap_handle,
-        )
-        .await?;
-        Ok(())
-    }
-
     pub(crate) async fn alloc_inode(
         &self,
         inode_type: FileType,
@@ -545,6 +525,44 @@ impl Ext4 {
             bg_id = bg_id.saturating_add(1);
         }
         Err(Ext4Error::NoSpace)
+    }
+
+    pub(crate) async fn free_inode(
+        &self,
+        inode: Inode,
+    ) -> Result<(), Ext4Error> {
+        let block_group_index = (inode.index.get() - 1)
+            / self.0.superblock.inodes_per_block_group();
+        let inode_bitmap_handle =
+            self.get_inode_bitmap_handle(block_group_index);
+        let inode_offset = (inode.index.get() - 1)
+            % self.0.superblock.inodes_per_block_group();
+        inode_bitmap_handle.set(inode_offset, false, self).await?;
+        self.update_inode_bitmap_checksum(
+            block_group_index,
+            inode_bitmap_handle,
+        )
+        .await?;
+        // Set number of free inodes in block group
+        let bg = self
+            .0
+            .block_group_descriptors
+            .get(usize_from_u32(block_group_index))
+            .unwrap();
+        let free_inodes = bg.free_inodes_count();
+        bg.set_free_inodes_count(free_inodes.saturating_add(1));
+        if inode.file_type().is_dir() {
+            let used_dirs = bg.used_dirs_count();
+            bg.set_used_dirs_count(used_dirs.saturating_sub(1));
+        }
+        bg.write(self).await?;
+        // Set number of free inodes in superblock
+        let total_free_inodes = self.0.superblock.free_inodes_count();
+        self.0
+            .superblock
+            .set_free_inodes_count(total_free_inodes.saturating_add(1));
+        self.0.superblock.write(self).await?;
+        Ok(())
     }
 
     #[expect(unused)]
@@ -606,6 +624,45 @@ impl Ext4 {
             bg_id = bg_id.saturating_add(1);
         }
         Err(Ext4Error::NoSpace)
+    }
+
+    pub(crate) async fn free_block(
+        &self,
+        block_index: FsBlockIndex,
+    ) -> Result<(), Ext4Error> {
+        let block_group_index = u64::from(block_index)
+            / NonZeroU64::from(self.0.superblock.blocks_per_group());
+        let block_bitmap_handle =
+            self.get_block_bitmap_handle(block_group_index as u32);
+        let block_offset =
+            block_index % u64::from(self.0.superblock.blocks_per_group().get());
+        block_bitmap_handle
+            .set(block_offset as u32, false, self)
+            .await?;
+        self.update_block_bitmap_checksum(
+            block_group_index as u32,
+            block_bitmap_handle,
+        )
+        .await?;
+        // Set number of free blocks in block group
+        let bg = self
+            .0
+            .block_group_descriptors
+            .get(block_group_index as usize)
+            .unwrap();
+        let free_blocks = bg.free_blocks_count();
+        bg.set_free_blocks_count(free_blocks.saturating_add(1));
+        bg.write(self).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn delete_file(
+        &self,
+        inode: Inode,
+    ) -> Result<(), Ext4Error> {
+        let blocks = FileBlocks::new(self.clone(), &inode)?;
+        blocks.free_all(self).await?;
+        self.free_inode(inode).await
     }
 
     /// Create a new inode of the given type, and return its index.
@@ -975,16 +1032,15 @@ impl Ext4 {
     /// # Errors
     ///
     /// An error will be returned if:
-    /// * `path` is not absolute.
-    /// * The parent directory does not exist or is not a directory.
-    /// * The operation would require freeing an inode (i.e. the target inode has `nlinks == 1`)
-    ///   (returns [`Ext4Error::Readonly`]).
+    /// * The parent inode is not a directory.
+    /// * adding `name` to the parent directory would require allocating a block (returns [`Ext4Error::Readonly`]).
+    /// * `name` causes a malformed path
     pub async fn unlink(
         &self,
         parent_inode: &Inode,
         name: String,
-        inode: &mut Inode,
-    ) -> Result<(), Ext4Error> {
+        inode: Inode,
+    ) -> Result<Option<Inode>, Ext4Error> {
         if !parent_inode.file_type().is_dir() {
             return Err(Ext4Error::NotADirectory);
         }
@@ -993,18 +1049,20 @@ impl Ext4 {
             fs: &Ext4,
             parent_inode: &Inode,
             name: String,
-            inode: &mut Inode,
-        ) -> Result<(), Ext4Error> {
+            mut inode: Inode,
+        ) -> Result<Option<Inode>, Ext4Error> {
             let old = inode.links_count();
-            if old <= 1 {
-                return Err(Ext4Error::Readonly);
-            }
             inode.set_links_count(old - 1);
             inode.write(fs).await?;
             let name = DirEntryName::try_from(name.as_str())
                 .map_err(|_| Ext4Error::MalformedPath)?;
             dir::remove_dir_entry_non_htree(fs, parent_inode, name).await?;
-            Ok(())
+            if inode.links_count() == 0 {
+                fs.delete_file(inode).await?;
+                Ok(None)
+            } else {
+                Ok(Some(inode))
+            }
         }
 
         inner(self, parent_inode, name, inode).await
