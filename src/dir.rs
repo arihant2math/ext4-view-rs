@@ -112,7 +112,7 @@ pub(crate) async fn add_dir_entry_non_htree(
             let used = if inode_field == 0 {
                 0usize
             } else {
-                let name_len = block_buf[off + 6] as usize;
+                let name_len = usize::from(block_buf[off + 6]);
                 dir_entry_min_size(name_len)
             };
 
