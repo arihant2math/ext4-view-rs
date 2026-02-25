@@ -630,6 +630,7 @@ impl Ext4 {
         &self,
         block_index: FsBlockIndex,
     ) -> Result<(), Ext4Error> {
+        assert_ne!(block_index, 0);
         let block_group_index = u64::from(block_index)
             / NonZeroU64::from(self.0.superblock.blocks_per_group());
         let block_bitmap_handle =

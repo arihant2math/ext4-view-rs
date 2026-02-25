@@ -56,6 +56,9 @@ impl FileBlocks {
             blocks.push(block);
         }
         for block in blocks {
+            if block == 0 {
+                continue;
+            }
             ext4.free_block(block).await?;
         }
         Ok(())
