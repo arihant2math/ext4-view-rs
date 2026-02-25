@@ -992,7 +992,6 @@ impl Ext4 {
         parent_inode: &Inode,
         name: String,
         inode: &mut Inode,
-        file_type: FileType,
     ) -> Result<(), Ext4Error> {
         if !parent_inode.file_type().is_dir() {
             return Err(Ext4Error::NotADirectory);
@@ -1002,7 +1001,6 @@ impl Ext4 {
             parent_inode: &Inode,
             name: String,
             inode: &mut Inode,
-            file_type: FileType,
         ) -> Result<(), Ext4Error> {
             let old = inode.links_count();
             let new = old.checked_add(1).ok_or(Ext4Error::Readonly)?;
@@ -1015,13 +1013,13 @@ impl Ext4 {
                 parent_inode,
                 name,
                 inode.index,
-                file_type,
+                inode.file_type(),
             )
             .await?;
             Ok(())
         }
 
-        inner(self, parent_inode, name, inode, file_type).await
+        inner(self, parent_inode, name, inode).await
     }
 
     /// Remove a directory entry at `path`.

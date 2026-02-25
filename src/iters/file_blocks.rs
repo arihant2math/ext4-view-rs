@@ -9,6 +9,8 @@
 mod block_map;
 mod extents_blocks;
 
+use alloc::vec::Vec;
+
 use crate::block_index::FsBlockIndex;
 use crate::inode::{Inode, InodeFlags};
 use crate::iters::AsyncIterator;
