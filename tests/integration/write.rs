@@ -234,7 +234,7 @@ async fn test_inode_creation() {
     let fs = load_fs_shared_rw("test_disk1.bin.zst").await;
 
     // Create a new file in the root directory.
-    let new_inode = fs
+    let mut new_inode = fs
         .create_inode(InodeCreationOptions {
             file_type: FileType::Regular,
             mode: InodeMode::S_IRUSR | InodeMode::S_IWUSR | InodeMode::S_IFREG,
@@ -252,4 +252,43 @@ async fn test_inode_creation() {
     );
     assert_eq!(new_inode.metadata().uid, 0);
     assert_eq!(new_inode.metadata().gid, 0);
+    let root_inode = fs
+        .path_to_inode(Path::try_from("/").unwrap(), FollowSymlinks::All)
+        .await
+        .unwrap();
+    // Link the new inode into the root directory.
+    fs.link(&root_inode, "new_file".to_string(), &mut new_inode)
+        .await
+        .unwrap();
+    // Ensure the new file is visible at the expected path.
+    let new_file_inode = fs
+        .path_to_inode("/new_file".try_into().unwrap(), FollowSymlinks::All)
+        .await
+        .unwrap();
+    assert_eq!(new_file_inode.index, new_inode.index);
+}
+
+#[tokio::test]
+async fn test_inode_deletion() {
+    let fs = load_fs_shared_rw("test_disk1.bin.zst").await;
+
+    let root_inode = fs
+        .path_to_inode(Path::try_from("/").unwrap(), FollowSymlinks::All)
+        .await
+        .unwrap();
+    let empty_inode = fs
+        .path_to_inode("/empty_file".try_into().unwrap(), FollowSymlinks::All)
+        .await
+        .unwrap();
+    let inode = fs
+        .unlink(&root_inode, "empty_file".to_string(), empty_inode)
+        .await
+        .unwrap();
+    assert!(inode.is_none());
+    // Ensure the file is no longer visible.
+    let err = fs
+        .path_to_inode("/empty_file".try_into().unwrap(), FollowSymlinks::All)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Ext4Error::NotFound));
 }

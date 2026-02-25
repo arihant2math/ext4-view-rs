@@ -248,14 +248,16 @@ impl Inode {
         inode_creation_data: InodeCreationOptions,
     ) -> Result<Self, Ext4Error> {
         let inode_data = vec![0; usize::from(ext4.0.superblock.inode_size())];
+        let mut checksum_base =
+            Checksum::with_seed(ext4.0.superblock.checksum_seed());
+        checksum_base.update_u32_le(index.get());
+        checksum_base.update_u32_le(0); // i_generation is zero for new inodes
 
         let mut inode = Self {
             index,
             file_type: inode_creation_data.file_type,
             inode_data,
-            checksum_base: Checksum::with_seed(
-                ext4.0.superblock.checksum_seed(),
-            ),
+            checksum_base,
             file_size_in_blocks: 0,
         };
 
