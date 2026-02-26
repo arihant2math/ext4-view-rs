@@ -292,3 +292,55 @@ async fn test_multi_block_write() {
     assert_eq!(total_read, data.len());
     assert_eq!(&buf, &data);
 }
+
+#[tokio::test]
+async fn test_init_directory_creates_dot_and_dotdot() {
+    let fs = load_test_disk1_rw().await;
+    let root = fs.read_root_inode().await.unwrap();
+
+    // Create a new directory inode and initialize it.
+    let mut dir_inode = fs
+        .create_inode(InodeCreationOptions {
+            file_type: FileType::Directory,
+            mode: InodeMode::S_IRUSR
+                | InodeMode::S_IWUSR
+                | InodeMode::S_IXUSR
+                | InodeMode::S_IFDIR,
+            uid: 0,
+            gid: 0,
+            time: Default::default(),
+            flags: InodeFlags::empty(),
+        })
+        .await
+        .unwrap();
+
+    ext4_view::init_directory(&fs, &mut dir_inode, root.index)
+        .await
+        .unwrap();
+
+    // Link it into the root so it becomes reachable via path resolution.
+    fs.link(&root, "new_dir".to_string(), &mut dir_inode)
+        .await
+        .unwrap();
+
+    // Open the directory and verify '.' and '..'.
+    let opened = fs.open(Path::new("/new_dir")).await.unwrap();
+
+    let dot = ext4_view::get_dir_entry_inode_by_name(
+        &fs,
+        opened.inode(),
+        ext4_view::DirEntryName::try_from(".").unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(dot.index, opened.inode().index);
+
+    let dotdot = ext4_view::get_dir_entry_inode_by_name(
+        &fs,
+        opened.inode(),
+        ext4_view::DirEntryName::try_from("..").unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(dotdot.index, root.index);
+}

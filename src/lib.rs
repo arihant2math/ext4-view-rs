@@ -159,7 +159,7 @@ use journal::Journal;
 use superblock::Superblock;
 use util::usize_from_u32;
 
-pub use dir::get_dir_entry_inode_by_name;
+pub use dir::{get_dir_entry_inode_by_name, init_directory};
 pub use dir_entry::{DirEntry, DirEntryName, DirEntryNameError};
 pub use error::{Corrupt, Ext4Error, Incompatible};
 pub use features::IncompatibleFeatures;

@@ -11,6 +11,7 @@ use crate::dir_block::DirBlock;
 use crate::dir_entry::DirEntryName;
 use crate::dir_htree::get_dir_entry_via_htree;
 use crate::error::{CorruptKind, Ext4Error};
+use crate::file::write_at;
 use crate::file_type::FileType;
 use crate::inode::{Inode, InodeFlags, InodeIndex};
 use crate::iters::AsyncIterator;
@@ -293,6 +294,104 @@ pub(crate) async fn remove_dir_entry_non_htree(
     }
 
     Err(Ext4Error::NotFound)
+}
+
+/// Initialize a newly created directory inode by writing its initial entries.
+///
+/// This creates the required `.` and `..` entries in the first directory block.
+///
+/// Notes/limitations:
+/// - Only supports non-htree, non-encrypted directories.
+/// - Uses [`write_at`] so blocks will be allocated as needed, and the inode size
+///   will be updated and persisted.
+/// - This does not modify the parent directory; callers typically still need to
+///   link the new directory into the parent.
+pub async fn init_directory(
+    fs: &Ext4,
+    dir_inode: &mut Inode,
+    parent_inode_index: InodeIndex,
+) -> Result<(), Ext4Error> {
+    if !dir_inode.file_type().is_dir() {
+        return Err(Ext4Error::NotADirectory);
+    }
+
+    if dir_inode.flags().contains(InodeFlags::DIRECTORY_ENCRYPTED) {
+        return Err(Ext4Error::Encrypted);
+    }
+
+    // We only support the plain (non-htree) format for initialization.
+    if dir_inode.flags().contains(InodeFlags::DIRECTORY_HTREE) {
+        return Err(Ext4Error::Readonly);
+    }
+
+    // Be conservative: don't try to re-init an existing directory.
+    if dir_inode.size_in_bytes() != 0 {
+        return Err(Ext4Error::AlreadyExists);
+    }
+
+    let block_size = fs.0.superblock.block_size().to_usize();
+    let mut block_buf = vec![0u8; block_size];
+
+    // When metadata checksums are enabled, leaf blocks include a 12-byte tail.
+    // Our `DirBlock` helper will compute/update the checksum using everything
+    // except the tail, so ensure entries don't overlap it.
+    let tail_size = if fs.has_metadata_checksums() { 12usize } else { 0usize };
+    let usable = block_size
+        .checked_sub(tail_size)
+        .ok_or_else(|| Ext4Error::from(CorruptKind::DirEntry(dir_inode.index)))?;
+
+    let dot = DirEntryName::try_from(".").expect("valid dir entry name");
+    let dotdot = DirEntryName::try_from("..").expect("valid dir entry name");
+
+    let dot_len = dir_entry_min_size(dot.as_ref().len());
+    if dot_len >= usable {
+        return Err(CorruptKind::DirEntry(dir_inode.index).into());
+    }
+
+    // '.' entry.
+    write_dir_entry_bytes(
+        &mut block_buf,
+        0,
+        dot_len,
+        dir_inode.index,
+        dot,
+        FileType::Directory,
+    )?;
+
+    // '..' entry consumes the remainder of the usable area.
+    let dotdot_off = dot_len;
+    let dotdot_rec_len = usable
+        .checked_sub(dotdot_off)
+        .ok_or_else(|| Ext4Error::from(CorruptKind::DirEntry(dir_inode.index)))?;
+
+    write_dir_entry_bytes(
+        &mut block_buf,
+        dotdot_off,
+        dotdot_rec_len,
+        parent_inode_index,
+        dotdot,
+        FileType::Directory,
+    )?;
+
+    // Update the checksum tail (stored in the last 4 bytes) if enabled.
+    DirBlock {
+        fs,
+        // Not used by update_checksum; set a dummy value.
+        block_index: 0,
+        is_first: true,
+        dir_inode: dir_inode.index,
+        has_htree: false,
+        checksum_base: dir_inode.checksum_base().clone(),
+    }
+    .update_checksum(&mut block_buf)?;
+
+    // Persist: write_at will allocate blocks and update inode size/extent tree.
+    let n = write_at(fs, dir_inode, &block_buf, 0).await?;
+    if n != block_buf.len() {
+        return Err(Ext4Error::NoSpace);
+    }
+
+    Ok(())
 }
 
 fn dir_entry_min_size(name_len: usize) -> usize {
