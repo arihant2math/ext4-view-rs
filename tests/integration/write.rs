@@ -7,132 +7,12 @@
 // except according to those terms.
 
 use ext4_view::{
-    Ext4, Ext4Error, FileType, FollowSymlinks, InodeCreationOptions,
-    InodeFlags, InodeMode, Path,
+    Ext4Error, FileType, FollowSymlinks, InodeCreationOptions, InodeFlags,
+    InodeMode, Path,
 };
 use tokio;
 
-use super::test_util::load_compressed_filesystem;
-
-use async_trait::async_trait;
-use ext4_view::Ext4Read;
-use ext4_view::Ext4Write;
-use std::error::Error as StdError;
-use std::fmt::{self, Display, Formatter};
-use std::sync::{Arc, Mutex};
-
-// Simple error for MemWriter failures.
-#[derive(Debug)]
-struct MemWriterError;
-impl Display for MemWriterError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "mem writer error")
-    }
-}
-impl StdError for MemWriterError {}
-
-// Local writer backed by a Mutex<Vec<u8>>.
-struct MemWriter(Mutex<Vec<u8>>);
-
-// Reader+Writer backed by a shared Arc<Mutex<Vec<u8>>> to verify persistence.
-struct MemRw(Arc<Mutex<Vec<u8>>>);
-
-#[async_trait]
-impl Ext4Read for MemRw {
-    async fn read(
-        &self,
-        start_byte: u64,
-        dst: &mut [u8],
-    ) -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
-        let guard = self.0.lock().unwrap();
-        let start = start_byte as usize;
-        let end = start.checked_add(dst.len()).ok_or_else(|| {
-            Box::new(MemWriterError)
-                as Box<dyn StdError + Send + Sync + 'static>
-        })?;
-        if end > guard.len() {
-            return Err(Box::new(MemWriterError));
-        }
-        dst.copy_from_slice(&guard[start..end]);
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl Ext4Write for MemRw {
-    async fn write(
-        &self,
-        start_byte: u64,
-        src: &[u8],
-    ) -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
-        let mut guard = self.0.lock().unwrap();
-        let start = start_byte as usize;
-        let end = start.checked_add(src.len()).ok_or_else(|| {
-            Box::new(MemWriterError)
-                as Box<dyn StdError + Send + Sync + 'static>
-        })?;
-        if end > guard.len() {
-            return Err(Box::new(MemWriterError));
-        }
-        guard[start..end].copy_from_slice(src);
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl Ext4Write for MemWriter {
-    async fn write(
-        &self,
-        start_byte: u64,
-        src: &[u8],
-    ) -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
-        let mut guard = self.0.lock().unwrap();
-        let start = start_byte as usize;
-        let end = start.checked_add(src.len()).ok_or_else(|| {
-            Box::new(MemWriterError)
-                as Box<dyn StdError + Send + Sync + 'static>
-        })?;
-        if end > guard.len() {
-            return Err(Box::new(MemWriterError));
-        }
-        guard[start..end].copy_from_slice(src);
-        Ok(())
-    }
-}
-
-async fn load_fs_with_writer(name: &str) -> Ext4 {
-    // Decompress into memory
-    let output = std::process::Command::new("zstd")
-        .args(["--decompress", "--stdout", &format!("test_data/{name}")])
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-
-    let data: Vec<u8> = output.stdout;
-    // Reader uses a clone of the data; writer uses our MemWriter.
-    Ext4::load_with_writer(
-        Box::new(data.clone()),
-        Some(Box::new(MemWriter(Mutex::new(data)))),
-    )
-    .await
-    .unwrap()
-}
-
-async fn load_fs_shared_rw(name: &str) -> Ext4 {
-    // Decompress into memory
-    let output = std::process::Command::new("zstd")
-        .args(["--decompress", "--stdout", &format!("test_data/{name}")])
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-
-    let data: Vec<u8> = output.stdout;
-    let shared = Arc::new(Mutex::new(data));
-    let reader = Box::new(MemRw(shared.clone())) as Box<dyn Ext4Read>;
-    let writer = Some(Box::new(MemRw(shared.clone())) as Box<dyn Ext4Write>);
-
-    Ext4::load_with_writer(reader, writer).await.unwrap()
-}
+use super::test_util::{load_compressed_filesystem, load_test_disk1_rw};
 
 #[tokio::test]
 async fn test_write_requires_writer() {
@@ -148,7 +28,7 @@ async fn test_write_requires_writer() {
 #[tokio::test]
 async fn test_write_into_hole_is_error() {
     // Load filesystem with writer.
-    let fs = load_fs_with_writer("test_disk1.bin.zst").await;
+    let fs = load_test_disk1_rw().await;
 
     // Open the file with holes. The first two blocks are holes.
     let mut file = fs.open("/holes").await.unwrap();
@@ -161,7 +41,7 @@ async fn test_write_into_hole_is_error() {
 #[tokio::test]
 async fn test_write_caps_to_file_end_and_block_boundary() {
     // Load filesystem with writer.
-    let fs = load_fs_shared_rw("test_disk1.bin.zst").await;
+    let fs = load_test_disk1_rw().await;
 
     // Small file is "hello, world!" (13 bytes) and fits in a single block.
     let mut file = fs.open("/small_file").await.unwrap();
@@ -187,7 +67,7 @@ async fn test_write_caps_to_file_end_and_block_boundary() {
 #[tokio::test]
 async fn test_write_persists_data() {
     // Load filesystem with shared reader/writer to the same buffer.
-    let fs = load_fs_shared_rw("test_disk1.bin.zst").await;
+    let fs = load_test_disk1_rw().await;
 
     // Open small_file and write within allocated space.
     let mut file = fs.open("/small_file").await.unwrap();
@@ -203,7 +83,7 @@ async fn test_write_persists_data() {
 
 #[tokio::test]
 async fn test_inode_modification_time() {
-    let fs = load_fs_shared_rw("test_disk1.bin.zst").await;
+    let fs = load_test_disk1_rw().await;
 
     let mut inode = fs
         .path_to_inode(
@@ -231,7 +111,7 @@ async fn test_inode_modification_time() {
 
 #[tokio::test]
 async fn test_inode_creation() {
-    let fs = load_fs_shared_rw("test_disk1.bin.zst").await;
+    let fs = load_test_disk1_rw().await;
 
     // Create a new file in the root directory.
     let mut new_inode = fs
@@ -271,7 +151,7 @@ async fn test_inode_creation() {
 
 #[tokio::test]
 async fn test_inode_deletion() {
-    let fs = load_fs_shared_rw("test_disk1.bin.zst").await;
+    let fs = load_test_disk1_rw().await;
 
     let root_inode = fs
         .path_to_inode(Path::try_from("/").unwrap(), FollowSymlinks::All)

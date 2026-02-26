@@ -1090,6 +1090,7 @@ impl Debug for Ext4 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::load_test_disk1_rw;
     use test_util::load_test_disk1;
 
     #[tokio::test]
@@ -1281,5 +1282,21 @@ mod tests {
         let data = inode.inode_data.clone();
         inode.update_inode_data(&fs);
         assert_eq!(inode.inode_data, data);
+    }
+
+    #[tokio::test]
+    async fn test_block_modification() {
+        // Modify a block and check that the change is visible when reading the block again.
+        let fs = load_test_disk1_rw().await;
+        let block_index = 100;
+        let offset_within_block = 0;
+        let mut data = vec![5; 4];
+        fs.write_to_block(block_index, offset_within_block, &data)
+            .await
+            .unwrap();
+        fs.read_from_block(block_index, offset_within_block, &mut data)
+            .await
+            .unwrap();
+        assert_eq!(data, [5; 4]);
     }
 }

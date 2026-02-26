@@ -583,7 +583,7 @@ mod tests {
         let mut iter =
             ReadDir::new(fs.clone(), &dir_inode, PathBuf::from(dir)).unwrap();
         let mut count = 0;
-        for iter_entry in iter.next().await {
+        while let Some(iter_entry) = iter.next().await {
             let iter_entry = iter_entry.unwrap();
             let htree_entry =
                 get_dir_entry_via_htree(fs, &dir_inode, iter_entry.file_name())
