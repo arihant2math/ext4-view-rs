@@ -321,13 +321,17 @@ impl File {
             .await?;
 
         // Update position and block iterator state.
-        let new_offset_within_block: u32 =
-            offset_within_block.checked_add(u32::try_from(write_len).unwrap()).unwrap();
+        let new_offset_within_block: u32 = offset_within_block
+            .checked_add(u32::try_from(write_len).unwrap())
+            .unwrap();
         if new_offset_within_block >= block_size {
             // Move to next block on subsequent calls.
             self.block_index = None;
         }
-        let new_position = self.position.checked_add(u64::try_from(write_len).unwrap()).unwrap();
+        let new_position = self
+            .position
+            .checked_add(u64::try_from(write_len).unwrap())
+            .unwrap();
         self.position = new_position;
 
         // If we extended past previous EOF, update inode size without allocating.
