@@ -597,6 +597,28 @@ impl Ext4 {
         ))
     }
 
+    pub(crate) async fn alloc_block_num(
+        &self,
+        block: FsBlockIndex,
+    ) -> Result<(), Ext4Error> {
+        let (block_group_index, block_offset) =
+            self.block_block_group_location(block)?;
+        let block_bitmap_handle =
+            self.get_block_bitmap_handle(block_group_index);
+        block_bitmap_handle.set(block_offset, true, self).await?;
+        self.update_block_bitmap_checksum(
+            block_group_index,
+            block_bitmap_handle,
+        )
+        .await?;
+        // Set number of free blocks in block group
+        let bg = self.get_block_group_descriptor(block_group_index);
+        let free_blocks = bg.free_blocks_count();
+        bg.set_free_blocks_count(free_blocks.checked_sub(1).unwrap());
+        bg.write(self).await?;
+        Ok(())
+    }
+
     #[expect(unused)]
     pub(crate) async fn alloc_block(
         &self,

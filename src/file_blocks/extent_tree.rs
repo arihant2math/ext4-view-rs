@@ -429,6 +429,7 @@ impl ExtentTree {
 
     pub(crate) async fn allocate(
         &mut self,
+        start: FileBlockIndex,
         amount: NonZeroU32,
         initialized: bool,
     ) -> Result<(), Ext4Error> {
@@ -437,13 +438,30 @@ impl ExtentTree {
         // Otherwise, panic for now
         let last_allocated = self.last_allocated_extent().await?;
         if let Some((path, last_extent)) = last_allocated {
+            if let ExtentNodeEntries::Leaf(extents) = &self.node.entries {
+                if extents.len()
+                    < usize_from_u32(u32::from(self.node.header.max_entries))
+                {
+                    let start_block =
+                        self.ext4.alloc_blocks(self.inode, amount).await?;
+                    self.node
+                        .push_extent(Extent {
+                            block_within_file: start,
+                            start_block,
+                            num_blocks: u16::try_from(amount.get()).unwrap(),
+                            is_initialized: initialized,
+                        })
+                        .unwrap();
+                    return Ok(());
+                }
+            }
             todo!()
         } else {
             let start_block =
                 self.ext4.alloc_blocks(self.inode, amount).await?;
             self.node
                 .push_extent(Extent {
-                    block_within_file: 0,
+                    block_within_file: start,
                     start_block,
                     num_blocks: u16::try_from(amount.get()).unwrap(),
                     is_initialized: initialized,
@@ -455,17 +473,16 @@ impl ExtentTree {
 
     pub(crate) async fn extend(
         &mut self,
-        last_allocated: u32,
+        start: FileBlockIndex,
         amount: NonZeroU32,
     ) -> Result<(), Ext4Error> {
         // Try and get next extent
-        let next_extent = self
-            .get_extent(FileBlockIndex::from(last_allocated + 1))
-            .await?;
-        if let Some(next_extent) = next_extent {
+        let existing_extent =
+            self.get_extent(FileBlockIndex::from(start)).await?;
+        if let Some(existing_extent) = existing_extent {
             todo!("Implement splitting extents, etc.")
         } else {
-            self.allocate(amount, true).await?;
+            self.allocate(start, amount, true).await?;
             Ok(())
         }
     }

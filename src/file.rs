@@ -298,6 +298,7 @@ impl File {
             self.inode.set_inline_data(tree.to_bytes());
             self.inode.set_size_in_bytes(buf.len() as u64);
             self.inode.write(&self.fs).await?;
+            self.file_blocks = FileBlocks::new(self.fs.clone(), &self.inode)?;
             return Ok(buf.len());
         }
 
