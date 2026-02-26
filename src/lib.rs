@@ -345,7 +345,7 @@ impl Ext4 {
             .reader
             .read(
                 block_index * self.0.superblock.block_size().to_u64()
-                    + offset_within_block as u64,
+                    + u64::from(offset_within_block),
                 dst,
             )
             .await
@@ -571,7 +571,7 @@ impl Ext4 {
         &self,
         block_index: FsBlockIndex,
     ) -> Result<(BlockGroupIndex, u32), Ext4Error> {
-        let block_group_index = u64::from(block_index)
+        let block_group_index = block_index
             / NonZeroU64::from(self.0.superblock.blocks_per_group());
         let block_offset = block_index
             % NonZeroU64::from(self.0.superblock.blocks_per_group());
@@ -579,7 +579,7 @@ impl Ext4 {
             // TODO: Wrong error?
             BlockGroupIndex::try_from(block_group_index)
                 .map_err(|_| CorruptKind::TooManyBlockGroups)?,
-            block_offset as u32,
+            u32::try_from(block_offset).unwrap(),
         ))
     }
 

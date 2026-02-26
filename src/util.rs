@@ -56,6 +56,7 @@ pub(crate) fn u32_from_hilo(hi: u16, lo: u16) -> u32 {
 #[inline]
 #[must_use]
 pub(crate) fn u32_to_hilo(val: u32) -> (u16, u16) {
+    #[expect(clippy::as_conversions)]
     let hi = (val >> 16) as u16;
     #[expect(clippy::as_conversions)]
     let lo = (val & 0xffff) as u16;

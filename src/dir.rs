@@ -231,7 +231,7 @@ pub(crate) async fn remove_dir_entry_non_htree(
             }
 
             if inode_field != 0 {
-                let name_len = block_buf[off + 6] as usize;
+                let name_len = usize::from(block_buf[off + 6]);
                 let name_start = off + 8;
                 let name_end = name_start + name_len;
                 if name_end > off + rec_len_usize {
