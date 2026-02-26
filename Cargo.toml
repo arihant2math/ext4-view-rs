@@ -45,6 +45,7 @@ crc = "3.0.0"
 [dev-dependencies]
 anyhow.workspace = true
 tokio = { version = "1", features = ["full"] }
+tempfile = "3"
 
 [package.metadata.docs.rs]
 all-features = true

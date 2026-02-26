@@ -1259,7 +1259,7 @@ impl Debug for Ext4 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::load_test_disk1_rw;
+    use crate::test_util::{load_test_disk1_rw, load_test_disk1_rw_no_fsck};
     use test_util::load_test_disk1;
 
     #[tokio::test]
@@ -1456,7 +1456,7 @@ mod tests {
     #[tokio::test]
     async fn test_block_modification() {
         // Modify a block and check that the change is visible when reading the block again.
-        let fs = load_test_disk1_rw().await;
+        let fs = load_test_disk1_rw_no_fsck().await;
         let block_index = 100;
         let offset_within_block = 0;
         let mut data = vec![5; 4];

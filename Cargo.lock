@@ -248,6 +248,7 @@ dependencies = [
  "async-trait",
  "bitflags",
  "crc",
+ "tempfile",
  "tokio",
 ]
 
