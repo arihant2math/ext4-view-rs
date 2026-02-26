@@ -415,6 +415,20 @@ impl Debug for File {
     }
 }
 
+/// Read from `inode` into `buf` starting at `offset`, returning how many bytes were read.
+/// The number may be smaller than the length of the input buffer if the read is only partially successful (e.g., due to reaching EOF).
+pub async fn read_at(
+    ext4: &Ext4,
+    inode: &Inode,
+    mut buf: &mut [u8],
+    offset: u64,
+) -> Result<usize, Ext4Error> {
+    // Open the file and seek to the desired offset, then read into the buffer.
+    let mut file = File::open_inode(ext4, inode.clone())?;
+    file.seek_to(offset).await?;
+    file.read_bytes(buf).await
+}
+
 /// Write `buf` into `inode` starting at `offset`, returning how many bytes were written.
 /// The number may be smaller than the length of the input buffer if the write is only partially successful (e.g., due to lack of space).
 pub async fn write_at(
