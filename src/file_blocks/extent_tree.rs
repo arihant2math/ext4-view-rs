@@ -340,7 +340,7 @@ impl ExtentTree {
     }
 
     /// Get the extent that contains the given block index, if any.
-    async fn get_extent(
+    async fn find_extent(
         &self,
         block_index: FileBlockIndex,
     ) -> Result<Option<Extent>, Ext4Error> {
@@ -393,7 +393,7 @@ impl ExtentTree {
         &self,
         block_index: FileBlockIndex,
     ) -> Result<Option<FsBlockIndex>, Ext4Error> {
-        if let Some(extent) = self.get_extent(block_index).await? {
+        if let Some(extent) = self.find_extent(block_index).await? {
             let offset_within_extent = block_index - extent.block_within_file;
             Ok(Some(
                 extent.start_block + FsBlockIndex::from(offset_within_extent),
@@ -508,9 +508,263 @@ impl ExtentTree {
         start: FileBlockIndex,
         amount: NonZeroU32,
     ) -> Result<(), Ext4Error> {
-        if let Some(extent) = self.get_extent(start).await? {
+        if let Some(extent) = self.find_extent(start).await? {
             todo!()
         }
         self.allocate(start, amount, true).await
     }
+
+    /// Find the previous/next extents that border a block.
+    ///
+    /// Extents cover half-open ranges: `[start, start + num_blocks)`.
+    ///
+    /// Returns:
+    /// - If `block_index` lies inside an extent, returns `(Some(extent), Some(extent))`.
+    /// - Otherwise, `prev` is the last extent with `end <= block_index` and `next` is the first
+    ///   extent with `start > block_index`.
+    async fn find_prev_next(
+        &self,
+        block_index: FileBlockIndex,
+    ) -> Result<(Option<Extent>, Option<Extent>), Ext4Error> {
+        /// Pick the child index to descend into for `block_index`.
+        ///
+        /// Mirrors the selection logic in `find_extent`: chooses the last key `<= block_index`.
+        fn child_index_for(
+            internal_nodes: &[ExtentInternalNode],
+            block_index: FileBlockIndex,
+        ) -> Option<usize> {
+            let mut next_node_index = None;
+            for (i, internal_node) in internal_nodes.iter().enumerate() {
+                if internal_node.block_within_file > block_index {
+                    break;
+                }
+                next_node_index = Some(i);
+            }
+            next_node_index
+        }
+
+        fn leaf_prev_next(
+            extents: &[Extent],
+            block_index: FileBlockIndex,
+        ) -> (Option<Extent>, Option<Extent>) {
+            let mut prev: Option<Extent> = None;
+            let mut next: Option<Extent> = None;
+
+            for extent in extents {
+                let start = extent.block_within_file;
+                let end = start + FileBlockIndex::from(extent.num_blocks);
+
+                if block_index >= start && block_index < end {
+                    return (Some(*extent), Some(*extent));
+                }
+
+                if end <= block_index {
+                    prev = Some(*extent);
+                    continue;
+                }
+
+                if start > block_index {
+                    next = Some(*extent);
+                    break;
+                }
+            }
+
+            (prev, next)
+        }
+
+        async fn leftmost_leaf_first_extent(
+            tree: &ExtentTree,
+            mut node: ExtentNode,
+        ) -> Result<Option<Extent>, Ext4Error> {
+            loop {
+                match &node.entries {
+                    ExtentNodeEntries::Leaf(extents) => {
+                        return Ok(extents.first().copied());
+                    }
+                    ExtentNodeEntries::Internal(internal_nodes) => {
+                        if internal_nodes.is_empty() {
+                            return Ok(None);
+                        }
+                        let next_node_block = internal_nodes[0].block;
+                        let next_node_data =
+                            tree.ext4.read_block(next_node_block).await?;
+                        node = ExtentNode::from_bytes(
+                            Some(next_node_block),
+                            &next_node_data,
+                            tree.inode,
+                            tree.checksum_base.clone(),
+                            &tree.ext4,
+                        )?;
+                    }
+                }
+            }
+        }
+
+        async fn rightmost_leaf_last_extent(
+            tree: &ExtentTree,
+            mut node: ExtentNode,
+        ) -> Result<Option<Extent>, Ext4Error> {
+            loop {
+                match &node.entries {
+                    ExtentNodeEntries::Leaf(extents) => {
+                        return Ok(extents.last().copied());
+                    }
+                    ExtentNodeEntries::Internal(internal_nodes) => {
+                        if internal_nodes.is_empty() {
+                            return Ok(None);
+                        }
+                        let next_node_block = internal_nodes.last().unwrap().block;
+                        let next_node_data =
+                            tree.ext4.read_block(next_node_block).await?;
+                        node = ExtentNode::from_bytes(
+                            Some(next_node_block),
+                            &next_node_data,
+                            tree.inode,
+                            tree.checksum_base.clone(),
+                            &tree.ext4,
+                        )?;
+                    }
+                }
+            }
+        }
+
+        // Descend to the leaf that would contain `block_index`, tracking the path of internal
+        // nodes so we can find the adjacent leaf if the neighbor is not in this leaf.
+        let mut node = self.node.clone();
+        let mut internal_path: Vec<(ExtentNode, usize)> = Vec::new();
+        loop {
+            match &node.entries {
+                ExtentNodeEntries::Leaf(extents) => {
+                    if extents.is_empty() {
+                        return Ok((None, None));
+                    }
+
+                    let (mut prev, mut next) = leaf_prev_next(extents, block_index);
+
+                    // If we found the containing extent, we’re done.
+                    if matches!((&prev, &next), (Some(p), Some(n)) if p == n) {
+                        return Ok((prev, next));
+                    }
+
+                    // If a neighbor is missing, attempt to find it in an adjacent leaf by walking
+                    // up the internal path and choosing a sibling subtree.
+                    if prev.is_none() {
+                        // Find previous leaf: go up until we can take a left sibling.
+                        let mut i = internal_path.len();
+                        while i > 0 {
+                            i -= 1;
+                            let (parent, child_index) = internal_path[i].clone();
+                            if let ExtentNodeEntries::Internal(internal_nodes) = &parent.entries {
+                                if child_index > 0 {
+                                    let sibling_block = internal_nodes[child_index - 1].block;
+                                    let sibling_data =
+                                        self.ext4.read_block(sibling_block).await?;
+                                    let sibling_node = ExtentNode::from_bytes(
+                                        Some(sibling_block),
+                                        &sibling_data,
+                                        self.inode,
+                                        self.checksum_base.clone(),
+                                        &self.ext4,
+                                    )?;
+                                    prev = rightmost_leaf_last_extent(self, sibling_node).await?;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if next.is_none() {
+                        // Find next leaf: go up until we can take a right sibling.
+                        let mut i = internal_path.len();
+                        while i > 0 {
+                            i -= 1;
+                            let (parent, child_index) = internal_path[i].clone();
+                            if let ExtentNodeEntries::Internal(internal_nodes) = &parent.entries {
+                                if child_index + 1 < internal_nodes.len() {
+                                    let sibling_block = internal_nodes[child_index + 1].block;
+                                    let sibling_data =
+                                        self.ext4.read_block(sibling_block).await?;
+                                    let sibling_node = ExtentNode::from_bytes(
+                                        Some(sibling_block),
+                                        &sibling_data,
+                                        self.inode,
+                                        self.checksum_base.clone(),
+                                        &self.ext4,
+                                    )?;
+                                    next = leftmost_leaf_first_extent(self, sibling_node).await?;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    return Ok((prev, next));
+                }
+                ExtentNodeEntries::Internal(internal_nodes) => {
+                    let next_node_index = match child_index_for(internal_nodes, block_index) {
+                        Some(i) => i,
+                        None => {
+                            // Per `find_extent`, if there is no internal node key <= block, we
+                            // treat as “not found”. We can still provide `next` by taking the first
+                            // extent in the leftmost subtree.
+                            let next = leftmost_leaf_first_extent(self, node).await?;
+                            return Ok((None, next));
+                        }
+                    };
+
+                    internal_path.push((node.clone(), next_node_index));
+
+                    let next_node_block = internal_nodes[next_node_index].block;
+                    let next_node_data = self.ext4.read_block(next_node_block).await?;
+                    node = ExtentNode::from_bytes(
+                        Some(next_node_block),
+                        &next_node_data,
+                        self.inode,
+                        self.checksum_base.clone(),
+                        &self.ext4,
+                    )?;
+                }
+            }
+        }
+    }
+
+    /// Insert a new extent. The new extent must not overlap existing extents.
+    /// This will error if the new extent overlaps existing extents.
+    async fn insert_extent(&mut self, new_extent: Extent) -> Result<(), Ext4Error> {
+        todo!()
+    }
+
+    /// Remove all extents that overlap file-block range [start, start+num_blocks)
+    /// and return any freed FsBlockIndex ranges (so caller can free blocks).
+    async fn remove_extent_range(
+        &mut self,
+        start: FileBlockIndex,
+        num_blocks: u32,
+    ) -> Result<Vec<(FsBlockIndex, u32)>, Ext4Error> {
+        todo!()
+    }
+
+    /// Split an existing extent so that there's a boundary at `split_block_within_file`.
+    /// If split_block equals extent.block_within_file or end, it's a no-op.
+    /// Returns Err if extent not found.
+    async fn split_extent_at(&mut self, split_block_within_file: FileBlockIndex) -> Result<(), Ext4Error> {
+        todo!()
+    }
+
+    /// Mark a (contiguous) file-block range as initialized. Internally this may
+    /// split extents and flip `is_initialized` flags for affected extents/blocks.
+    async fn mark_initialized(
+        &mut self,
+        start: FileBlockIndex,
+        num_blocks: u32,
+    ) -> Result<(), Ext4Error> {
+        todo!()
+    }
+
+    /// Try to merge adjacency-eligible extents (same start_block+num or both initialized/uninitialized adjacent)
+    /// starting at `hint_block` to reduce fragmentation.
+    async fn try_merge_adjacent(&mut self, hint_block: FileBlockIndex) -> Result<(), Ext4Error> {
+        todo!()
+    }
+
 }
