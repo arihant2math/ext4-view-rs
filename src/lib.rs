@@ -623,9 +623,9 @@ impl Ext4 {
     #[expect(unused)]
     pub(crate) async fn alloc_block(
         &self,
-        inode: &Inode,
+        inode_index: InodeIndex,
     ) -> Result<FsBlockIndex, Ext4Error> {
-        let mut bg_id = (inode.index.get() - 1)
+        let mut bg_id = (inode_index.get() - 1)
             / self.0.superblock.inodes_per_block_group();
         let mut bg_count = self.0.superblock.num_block_groups();
         let mut rewind = false;
