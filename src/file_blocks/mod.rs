@@ -6,7 +6,7 @@ use crate::block_index::{FileBlockIndex, FsBlockIndex};
 use alloc::vec::Vec;
 
 mod block_map;
-mod extent_tree;
+pub(crate) mod extent_tree;
 
 pub(crate) enum FileBlocks {
     BlockMap(block_map::BlockMap),
@@ -40,10 +40,10 @@ impl FileBlocks {
         }
     }
 
-    pub(crate) fn to_bytes(&self) -> Vec<u8> {
+    pub(crate) fn to_bytes(&self) -> [u8; 60] {
         match self {
             FileBlocks::ExtentTree(extent_tree) => extent_tree.to_bytes(),
-            FileBlocks::BlockMap(block_map) => block_map.to_bytes().to_vec(),
+            FileBlocks::BlockMap(block_map) => block_map.to_bytes(),
         }
     }
 

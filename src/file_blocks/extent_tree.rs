@@ -17,6 +17,7 @@ use crate::util::{
 };
 use alloc::vec;
 use alloc::vec::Vec;
+use core::num::NonZeroU32;
 
 /// Size of each entry within an extent node (including the header
 /// entry).
@@ -301,8 +302,11 @@ impl ExtentTree {
         })
     }
 
-    pub(crate) fn to_bytes(&self) -> Vec<u8> {
-        self.node.to_bytes(None)
+    pub(crate) fn to_bytes(&self) -> [u8; 60] {
+        let bytes = self.node.to_bytes(None);
+        let mut result = [0u8; 60];
+        result[..bytes.len()].copy_from_slice(&bytes);
+        result
     }
 
     pub(crate) fn from_inode(
@@ -425,7 +429,7 @@ impl ExtentTree {
 
     pub(crate) async fn allocate(
         &mut self,
-        amount: u32,
+        amount: NonZeroU32,
         initialized: bool,
     ) -> Result<(), Ext4Error> {
         // Find the rightmost leaf node.
@@ -441,7 +445,7 @@ impl ExtentTree {
                 .push_extent(Extent {
                     block_within_file: 0,
                     start_block,
-                    num_blocks: u16::try_from(amount).unwrap(),
+                    num_blocks: u16::try_from(amount.get()).unwrap(),
                     is_initialized: initialized,
                 })
                 .unwrap();
@@ -452,7 +456,7 @@ impl ExtentTree {
     pub(crate) async fn extend(
         &mut self,
         last_allocated: u32,
-        amount: u32,
+        amount: NonZeroU32,
     ) -> Result<(), Ext4Error> {
         // Try and get next extent
         let next_extent = self

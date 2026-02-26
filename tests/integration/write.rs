@@ -7,8 +7,8 @@
 // except according to those terms.
 
 use ext4_view::{
-    Ext4Error, FileType, FollowSymlinks, InodeCreationOptions, InodeFlags,
-    InodeMode, Path,
+    Ext4Error, File, FileType, FollowSymlinks, Inode, InodeCreationOptions,
+    InodeFlags, InodeMode, Path,
 };
 use tokio;
 
@@ -172,4 +172,28 @@ async fn test_inode_deletion() {
         .await
         .unwrap_err();
     assert!(matches!(err, Ext4Error::NotFound));
+}
+
+#[tokio::test]
+async fn test_new_file_grow() {
+    let fs = load_test_disk1_rw().await;
+    let new_inode = fs
+        .create_inode(InodeCreationOptions {
+            file_type: FileType::Regular,
+            mode: InodeMode::S_IRUSR | InodeMode::S_IWUSR | InodeMode::S_IFREG,
+            uid: 0,
+            gid: 0,
+            time: Default::default(),
+            flags: InodeFlags::INLINE_DATA,
+        })
+        .await
+        .unwrap();
+    let index = new_inode.index;
+    let mut file = File::open_inode(&fs, new_inode).unwrap();
+    let data = b"Hello, world! This file will grow as we write to it.";
+    let n = file.write_bytes(data).await.unwrap();
+    assert_eq!(n, data.len());
+    // Read back the inode and verify new length.
+    let inode = Inode::read(&fs, index).await.unwrap();
+    assert_eq!(inode.size_in_bytes(), data.len() as u64);
 }

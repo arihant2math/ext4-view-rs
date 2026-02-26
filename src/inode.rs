@@ -271,10 +271,7 @@ impl Inode {
         }
         inode.set_flags(flags);
         let blocks = FileBlocks::initialize(ext4.clone(), &inode)?;
-        let blocks_bytes = blocks.to_bytes();
-        // Pad blocks_bytes to fit in the inline data if necessary, and write it to the inode data.
-        let mut inline_data = [0u8; Self::INLINE_DATA_LEN];
-        inline_data[..blocks_bytes.len()].copy_from_slice(&blocks_bytes);
+        let inline_data = blocks.to_bytes();
         inode.set_inline_data(inline_data);
         inode.write(ext4).await?;
         Ok(inode)

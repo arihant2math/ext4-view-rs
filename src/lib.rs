@@ -149,6 +149,7 @@ use bitmap::BitmapHandle;
 use block_group::{BlockGroupDescriptor, BlockGroupIndex};
 use block_index::FsBlockIndex;
 use core::fmt::{self, Debug, Formatter};
+use core::num::NonZeroU32;
 use core::num::NonZeroU64;
 use error::CorruptKind;
 use features::ReadOnlyCompatibleFeatures;
@@ -656,7 +657,7 @@ impl Ext4 {
     pub(crate) async fn alloc_blocks(
         &self,
         inode_index: InodeIndex,
-        num_blocks: u32,
+        num_blocks: NonZeroU32,
     ) -> Result<FsBlockIndex, Ext4Error> {
         let mut bg_id = (inode_index.get() - 1)
             / self.0.superblock.inodes_per_block_group();
@@ -677,7 +678,7 @@ impl Ext4 {
 
             let free_blocks = bg.free_blocks_count();
 
-            if free_blocks >= num_blocks {
+            if free_blocks >= num_blocks.get() {
                 let block_bitmap_handle = self.get_block_bitmap_handle(bg_id);
                 let Some(block_num) = block_bitmap_handle
                     .find_first_n(num_blocks.into(), false, self)
@@ -685,7 +686,7 @@ impl Ext4 {
                 else {
                     continue;
                 };
-                for i in 0..num_blocks {
+                for i in 0..num_blocks.get() {
                     block_bitmap_handle
                         .set(block_num + u32::from(i), true, self)
                         .await?;
@@ -693,7 +694,7 @@ impl Ext4 {
                 self.update_block_bitmap_checksum(bg_id, block_bitmap_handle)
                     .await?;
                 bg.set_free_blocks_count(
-                    free_blocks.checked_sub(num_blocks).unwrap(),
+                    free_blocks.checked_sub(num_blocks.get()).unwrap(),
                 );
                 bg.write(self).await?;
                 let block_index = (u64::from(bg_id)
@@ -702,7 +703,7 @@ impl Ext4 {
                     + u64::from(block_num);
                 // Zero out the new blocks
                 let zeroes = vec![0; self.0.superblock.block_size().to_usize()];
-                for i in 0..num_blocks {
+                for i in 0..num_blocks.get() {
                     self.write_to_block(block_index + u64::from(i), 0, &zeroes)
                         .await?;
                 }

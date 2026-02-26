@@ -6,17 +6,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use crate::Ext4;
 use crate::block_index::FsBlockIndex;
 use crate::error::Ext4Error;
 use crate::inode::Inode;
+use crate::iters::AsyncIterator;
 use crate::iters::file_blocks::FileBlocks;
 use crate::path::Path;
 use crate::resolve::FollowSymlinks;
 use crate::util::usize_from_u32;
+use crate::{Ext4, InodeFlags, file_blocks};
 use core::fmt::{self, Debug, Formatter};
-
-use crate::iters::AsyncIterator;
+use core::num::NonZeroU32;
 
 /// An open file within an [`Ext4`] filesystem.
 pub struct File {
@@ -269,8 +269,37 @@ impl File {
         if buf.is_empty() {
             return Ok(0);
         }
-
         let block_size = self.fs.0.superblock.block_size();
+
+        // Special case for writing at position 0 of an empty file
+        if self.inode.size_in_bytes() == 0
+            && self.position == 0
+            && self.inode.flags().contains(InodeFlags::EXTENTS)
+        {
+            let mut tree = file_blocks::extent_tree::ExtentTree::from_inode(
+                self.fs.clone(),
+                &self.inode,
+            )?;
+            tree.extend(
+                0,
+                NonZeroU32::new(
+                    buf.len().div_ceil(block_size.to_usize()) as u32
+                )
+                .unwrap(),
+            )
+            .await?;
+            for i in 0..(buf.len() / block_size.to_usize()) as u32 {
+                let block_index = tree.get_block(i).await?.unwrap();
+                let buf_offset = (i as usize) * block_size.to_usize();
+                let to_write = &buf[buf_offset
+                    ..(buf_offset + block_size.to_usize()).min(buf.len())];
+                self.fs.write_to_block(block_index, 0, &to_write).await?;
+            }
+            self.inode.set_inline_data(tree.to_bytes());
+            self.inode.set_size_in_bytes(buf.len() as u64);
+            self.inode.write(&self.fs).await?;
+            return Ok(buf.len());
+        }
 
         // Get the block to write to.
         let block_index = if let Some(block_index) = self.block_index {
