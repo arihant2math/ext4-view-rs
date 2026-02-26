@@ -196,4 +196,9 @@ async fn test_new_file_grow() {
     // Read back the inode and verify new length.
     let inode = Inode::read(&fs, index).await.unwrap();
     assert_eq!(inode.size_in_bytes(), data.len() as u64);
+    let mut file = File::open_inode(&fs, inode).unwrap();
+    let mut buf = vec![0u8; data.len()];
+    let n = file.read_bytes(&mut buf).await.unwrap();
+    assert_eq!(n, data.len());
+    assert_eq!(&buf, data);
 }

@@ -288,7 +288,7 @@ impl File {
                 .unwrap(),
             )
             .await?;
-            for i in 0..(buf.len() / block_size.to_usize()) as u32 {
+            for i in 0..buf.len().div_ceil(block_size.to_usize()) as u32 {
                 let block_index = tree.get_block(i).await?.unwrap();
                 let buf_offset = (i as usize) * block_size.to_usize();
                 let to_write = &buf[buf_offset
