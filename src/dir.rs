@@ -246,8 +246,13 @@ pub(crate) async fn remove_dir_entry_non_htree(
 
                     if let Some(poff) = prev_off {
                         // Merge into previous record by extending its rec_len.
-                        let prev_rec_len = read_u16le(&block_buf, poff + 4);
-                        let new_len = usize::from(prev_rec_len) + rec_len_usize;
+                        let prev_rec_len = read_u16le(
+                            &block_buf,
+                            poff.checked_add(4).unwrap(),
+                        );
+                        let new_len = usize::from(prev_rec_len)
+                            .checked_add(rec_len_usize)
+                            .unwrap();
                         write_u16le(
                             &mut block_buf,
                             poff + 4,
@@ -295,7 +300,7 @@ fn dir_entry_min_size(name_len: usize) -> usize {
     let base = 8usize
         .checked_add(name_len)
         .expect("dir entry size overflow");
-    (base + 3) & !3
+    (base.checked_add(3).unwrap()) & !3
 }
 
 fn write_dir_entry_bytes(
@@ -310,22 +315,22 @@ fn write_dir_entry_bytes(
     if rec_len < need {
         return Err(Ext4Error::Readonly);
     }
-    if off + rec_len > block.len() {
+    if off.checked_add(rec_len).unwrap() > block.len() {
         return Err(CorruptKind::DirEntry(inode).into());
     }
 
     write_u32le(block, off, inode.get());
     write_u16le(
         block,
-        off + 4,
+        off.checked_add(4).unwrap(),
         u16::try_from(rec_len)
             .map_err(|_| Ext4Error::from(CorruptKind::DirEntry(inode)))?,
     );
-    block[off + 6] = u8::try_from(name.as_ref().len())
+    block[off.checked_add(6).unwrap()] = u8::try_from(name.as_ref().len())
         .map_err(|_| Ext4Error::from(CorruptKind::DirEntry(inode)))?;
-    block[off + 7] = file_type.to_dir_entry();
+    block[off.checked_add(7).unwrap()] = file_type.to_dir_entry();
 
-    let name_start = off + 8;
+    let name_start = off.checked_add(8).unwrap();
     let name_end = name_start + name.as_ref().len();
     block[name_start..name_end].copy_from_slice(name.as_ref());
 
