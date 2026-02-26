@@ -239,3 +239,24 @@ async fn test_new_file_grow2() {
     assert_eq!(n, data.len());
     assert_eq!(&buf, data);
 }
+
+#[tokio::test]
+async fn test_existing_file_grow() {
+    let fs = load_test_disk1_rw().await;
+    let mut inode = fs
+        .path_to_inode("/small_file".try_into().unwrap(), FollowSymlinks::All)
+        .await
+        .unwrap();
+    write_at(&fs, &mut inode, b" Adding more data to the small file.", 13)
+        .await
+        .unwrap();
+    let data = b"hello, world! Adding more data to the small file.";
+    // Read back the inode and verify new length.
+    let inode = Inode::read(&fs, inode.index).await.unwrap();
+    assert_eq!(inode.size_in_bytes(), data.len() as u64);
+    let mut file = File::open_inode(&fs, inode).unwrap();
+    let mut buf = vec![0u8; data.len()];
+    let n = file.read_bytes(&mut buf).await.unwrap();
+    assert_eq!(n, data.len());
+    assert_eq!(&buf, data);
+}
