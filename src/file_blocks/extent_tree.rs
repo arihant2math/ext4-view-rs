@@ -272,6 +272,14 @@ impl ExtentNode {
             ExtentNodeEntries::Internal(_) => Err(()),
         }
     }
+
+    pub(crate) async fn write(&self, ext4: &Ext4) -> Result<(), Ext4Error> {
+        if let Some(block) = self.block {
+            let bytes = self.to_bytes(None);
+            ext4.write_to_block(block, 0, &bytes).await?;
+        }
+        Ok(())
+    }
 }
 
 /// Iterator of an inode's extent tree.
