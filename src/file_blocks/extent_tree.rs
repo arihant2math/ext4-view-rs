@@ -382,9 +382,6 @@ impl ExtentTree {
         block_index: FileBlockIndex,
     ) -> Result<Option<FsBlockIndex>, Ext4Error> {
         if let Some(extent) = self.get_extent(block_index).await? {
-            if !extent.is_initialized {
-                return Ok(None);
-            }
             let offset_within_extent = block_index - extent.block_within_file;
             Ok(Some(
                 extent.start_block + FsBlockIndex::from(offset_within_extent),
@@ -442,8 +439,10 @@ impl ExtentTree {
                 if extents.len()
                     < usize_from_u32(u32::from(self.node.header.max_entries))
                 {
-                    let start_block =
-                        self.ext4.alloc_blocks(self.inode, amount).await?;
+                    let start_block = self
+                        .ext4
+                        .alloc_contiguous_blocks(self.inode, amount)
+                        .await?;
                     self.node
                         .push_extent(Extent {
                             block_within_file: start,
@@ -457,8 +456,10 @@ impl ExtentTree {
             }
             todo!()
         } else {
-            let start_block =
-                self.ext4.alloc_blocks(self.inode, amount).await?;
+            let start_block = self
+                .ext4
+                .alloc_contiguous_blocks(self.inode, amount)
+                .await?;
             self.node
                 .push_extent(Extent {
                     block_within_file: start,

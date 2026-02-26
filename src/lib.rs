@@ -677,7 +677,8 @@ impl Ext4 {
         Err(Ext4Error::NoSpace)
     }
 
-    pub(crate) async fn alloc_blocks(
+    /// Tries to allocate `num_blocks` contiguous blocks.
+    pub(crate) async fn alloc_contiguous_blocks(
         &self,
         inode_index: InodeIndex,
         num_blocks: NonZeroU32,
@@ -755,6 +756,38 @@ impl Ext4 {
         let bg = self.get_block_group_descriptor(block_group_index);
         let free_blocks = bg.free_blocks_count();
         bg.set_free_blocks_count(free_blocks.saturating_add(1));
+        bg.write(self).await?;
+        Ok(())
+    }
+
+    /// Frees `num_blocks` contiguous blocks starting at `block_index`.
+    #[expect(unused)]
+    pub(crate) async fn free_blocks(
+        &self,
+        block_index: FsBlockIndex,
+        num_blocks: NonZeroU32,
+    ) -> Result<(), Ext4Error> {
+        assert_ne!(block_index, 0);
+        let (block_group_index, block_offset) =
+            self.block_block_group_location(block_index)?;
+        let block_bitmap_handle =
+            self.get_block_bitmap_handle(block_group_index);
+        for i in 0..num_blocks.get() {
+            block_bitmap_handle
+                .set(block_offset + u32::from(i), false, self)
+                .await?;
+        }
+        self.update_block_bitmap_checksum(
+            block_group_index,
+            block_bitmap_handle,
+        )
+        .await?;
+        // Set number of free blocks in block group
+        let bg = self.get_block_group_descriptor(block_group_index);
+        let free_blocks = bg.free_blocks_count();
+        bg.set_free_blocks_count(
+            free_blocks.checked_add(num_blocks.get()).unwrap(),
+        );
         bg.write(self).await?;
         Ok(())
     }
