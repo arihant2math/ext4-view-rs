@@ -6,8 +6,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use crate::block_index::FsBlockIndex;
+use crate::block_index::{FileBlockIndex, FsBlockIndex};
 use crate::error::Ext4Error;
+use crate::extent::Extent;
 use crate::inode::Inode;
 use crate::iters::AsyncIterator;
 use crate::iters::file_blocks::FileBlocks;
@@ -15,6 +16,7 @@ use crate::path::Path;
 use crate::resolve::FollowSymlinks;
 use crate::util::usize_from_u32;
 use crate::{Ext4, InodeFlags, file_blocks};
+use core::cmp::max;
 use core::fmt::{self, Debug, Formatter};
 use core::num::NonZeroU32;
 
@@ -411,4 +413,291 @@ impl Debug for File {
             // readable.
             .finish_non_exhaustive()
     }
+}
+
+/// Write `buf` into `inode` starting at `offset`, returning how many bytes were written.
+/// The number may be smaller than the length of the input buffer if the write is only partially successful (e.g., due to lack of space).
+pub async fn write_at(
+    ext4: &Ext4,
+    inode: &mut Inode,
+    buf: &[u8],
+    offset: u64,
+) -> Result<usize, Ext4Error> {
+    fn blocks_needed_for_bytes(
+        offset_in_block: usize,
+        bytes_remaining: usize,
+        block_size: usize,
+    ) -> usize {
+        // Compute how many blocks are needed to write bytes_remaining starting at offset_in_block within the first block.
+        if offset_in_block >= block_size {
+            return 0; // Invalid offset, but treat as needing 0 blocks to avoid overflow
+        }
+        let first_block_capacity = block_size - offset_in_block;
+        if bytes_remaining <= first_block_capacity {
+            1
+        } else {
+            1 + (bytes_remaining - first_block_capacity + block_size - 1)
+                / block_size
+        }
+    }
+
+    fn bytes_for_blocks(
+        num_blocks: usize,
+        offset_in_block: usize,
+        block_size: usize,
+    ) -> usize {
+        // Compute how many bytes correspond to num_blocks starting at offset_in_block.
+        if num_blocks == 0 {
+            return 0;
+        }
+        let first_block_capacity = block_size - offset_in_block;
+        if num_blocks == 1 {
+            return first_block_capacity.min(block_size);
+        }
+        first_block_capacity + (num_blocks - 1) * block_size
+    }
+
+    async fn write_into_mapped_initialized_extent(
+        ext4: &Ext4,
+        inode: &Inode,
+        extent: &Extent,
+        offset_in_extent: usize,
+        run_blocks: usize,
+        buf: &[u8],
+        offset_in_block: usize,
+        block_size: usize,
+    ) -> Result<usize, Ext4Error> {
+        // For an initialized extent, we can directly write to the blocks for the full-block portion.
+        // For partial blocks at the boundaries, we need to read-modify-write to preserve existing data.
+        // This helper should handle both cases and return the number of bytes written.
+        unimplemented!()
+    }
+
+    async fn write_into_uninitialized_extent(
+        ext4: &Ext4,
+        inode: &Inode,
+        extent: &Extent,
+        offset_in_extent: usize,
+        run_blocks: usize,
+        buf: &[u8],
+        offset_in_block: usize,
+        block_size: usize,
+    ) -> Result<usize, Ext4Error> {
+        // For an uninitialized (unwritten) extent, we need to allocate blocks and mark them initialized.
+        // For full-blocks, we can directly write and then flip to initialized.
+        // For partial blocks, we must zero the unwritten parts to preserve the semantics of uninitialized extents.
+        // This helper should handle both cases and return the number of bytes written.
+        unimplemented!()
+    }
+
+    fn bytes_consumed_for_blocks(
+        num_blocks: usize,
+        offset_in_block: usize,
+        block_size: usize,
+    ) -> usize {
+        // Compute how many bytes are consumed for writing num_blocks starting at offset_in_block.
+        if num_blocks == 0 {
+            return 0;
+        }
+        let first_block_capacity = block_size - offset_in_block;
+        if num_blocks == 1 {
+            return first_block_capacity.min(block_size);
+        }
+        first_block_capacity + (num_blocks - 1) * block_size
+    }
+
+    async fn write_into_newly_allocated_extent(
+        ext4: &Ext4,
+        inode: &Inode,
+        extent: &Extent,
+        offset_in_block: usize,
+        buf: &[u8],
+        block_size: usize,
+    ) -> Result<usize, Ext4Error> {
+        // For a newly allocated extent, we can directly write to the blocks.
+        // If the first or last block is partial, we must zero the unwritten parts to preserve the semantics of uninitialized extents.
+        // This helper should handle both cases and return the number of bytes written.
+        unimplemented!()
+    }
+
+    let block_size = ext4.0.superblock.block_size().to_usize();
+    if buf.is_empty() {
+        return Ok(0);
+    }
+
+    let start_block =
+        FileBlockIndex::try_from(offset / block_size as u64).unwrap();
+    let mut start_offset_in_block = (offset % block_size as u64) as usize;
+    let mut bytes_remaining = buf.len();
+    let mut buf_pos = 0usize;
+    let mut current_block = start_block;
+    let mut total_written = 0usize;
+    let mut extent_tree =
+        file_blocks::extent_tree::ExtentTree::from_inode(ext4.clone(), inode)?;
+
+    while bytes_remaining > 0 {
+        let opt_extent = extent_tree.find_extent(current_block).await?;
+
+        match opt_extent {
+            Some(extent) => {
+                // extent covers a range of file blocks
+                let extent_block_start = extent.block_within_file;
+                let extent_block_len = extent.num_blocks as u64;
+                let offset_in_extent =
+                    (current_block - extent_block_start) as u64;
+                // number of blocks available in this extent starting at current_block
+                let avail_blocks_in_extent =
+                    (extent_block_len - offset_in_extent) as usize;
+
+                // determine how many bytes we can handle within this extent in a single run:
+                // convert bytes_remaining + start_offset_in_block... but simpler: compute how many file-blocks
+                // we can process here: `run_blocks = min(avail_blocks_in_extent, blocks_covered_by_bytes_remaining)`
+                let max_blocks_needed = blocks_needed_for_bytes(
+                    start_offset_in_block,
+                    bytes_remaining,
+                    block_size,
+                );
+                let run_blocks =
+                    core::cmp::min(avail_blocks_in_extent, max_blocks_needed);
+
+                // prepare to write run_blocks starting at current_block
+                if extent.is_initialized {
+                    // case A: initialized extent -> RMW for partial block at boundaries, direct write for full blocks
+                    total_written += write_into_mapped_initialized_extent(
+                        ext4,
+                        inode,
+                        &extent,
+                        offset_in_extent as usize,
+                        run_blocks,
+                        &buf[buf_pos
+                            ..buf_pos
+                                + bytes_for_blocks(
+                                    run_blocks,
+                                    start_offset_in_block,
+                                    block_size,
+                                )],
+                        start_offset_in_block,
+                        block_size,
+                    )
+                    .await?;
+                } else {
+                    // case B: uninitialized (unwritten) extent
+                    // For full-blocks: we can directly write blocks and then flip to initialized.
+                    // For partial blocks: we must zero the rest of the block(s) we don't overwrite.
+                    total_written += write_into_uninitialized_extent(
+                        ext4,
+                        inode,
+                        &extent,
+                        offset_in_extent as usize,
+                        run_blocks,
+                        &buf[buf_pos
+                            ..buf_pos
+                                + bytes_for_blocks(
+                                    run_blocks,
+                                    start_offset_in_block,
+                                    block_size,
+                                )],
+                        start_offset_in_block,
+                        block_size,
+                    )
+                    .await?;
+                    // this helper must split the extent and mark the written blocks initialized
+                }
+
+                // advance
+                let advanced_bytes = bytes_consumed_for_blocks(
+                    run_blocks,
+                    start_offset_in_block,
+                    block_size,
+                );
+                bytes_remaining -= advanced_bytes;
+                buf_pos += advanced_bytes;
+                current_block =
+                    current_block + FileBlockIndex::from(run_blocks as u32);
+                // after first block, start_offset_in_block becomes 0 for subsequent loops
+                start_offset_in_block = 0;
+            }
+            None => {
+                // case C: hole -> allocate new blocks, create initialized extents and write
+                // Decide how many blocks to allocate: prefer as many contiguous full-blocks as possible.
+                // Map bytes_remaining -> needed_blocks (including first partial block)
+                let needed_blocks = blocks_needed_for_bytes(
+                    start_offset_in_block,
+                    bytes_remaining,
+                    block_size,
+                );
+
+                // Try to allocate needed_blocks. If allocation fails for full amount, try smaller (but >0).
+                let mut tried_blocks = needed_blocks;
+                let start_fs_block = loop {
+                    match ext4
+                        .alloc_contiguous_blocks(
+                            inode.index,
+                            NonZeroU32::new(tried_blocks as u32).unwrap(),
+                        )
+                        .await
+                    {
+                        Ok(start_fs) => break start_fs,
+                        Err(_) => {
+                            if tried_blocks == 0 {
+                                return Ok(total_written);
+                            }
+                            tried_blocks = tried_blocks / 2; // or tried_blocks - 1
+                            if tried_blocks == 0 {
+                                return Ok(total_written);
+                            }
+                        }
+                    }
+                };
+                // Insert extent: file-blocks [current_block, current_block + tried_blocks) -> FS blocks [start_fs_block, ...]
+                let new_extent = Extent::new(
+                    current_block,
+                    start_fs_block,
+                    tried_blocks as u16,
+                );
+                extent_tree.insert_extent(new_extent).await?;
+                // Write data into the newly allocated blocks (same logic as initialized extents except we don't need to read old content)
+                // If first or last block is partial, zero the unwritten parts.
+                let want_bytes = bytes_for_blocks(
+                    tried_blocks,
+                    start_offset_in_block,
+                    block_size,
+                );
+                let have_bytes = bytes_remaining;
+                let slice_len = core::cmp::min(want_bytes, have_bytes);
+                total_written += write_into_newly_allocated_extent(
+                    ext4,
+                    inode,
+                    &new_extent,
+                    start_offset_in_block,
+                    &buf[buf_pos..buf_pos + slice_len],
+                    block_size,
+                )
+                .await?;
+
+                // advance variables
+                let advanced_bytes = bytes_consumed_for_blocks(
+                    tried_blocks,
+                    start_offset_in_block,
+                    block_size,
+                );
+                bytes_remaining -= advanced_bytes;
+                buf_pos += advanced_bytes;
+                current_block =
+                    current_block + FileBlockIndex::from(tried_blocks as u32);
+                start_offset_in_block = 0;
+            }
+        }
+        // Optional: after each change, try merging adjacent extents to keep tree compact
+        extent_tree.try_merge_adjacent(current_block).await?;
+    }
+
+    inode.set_size_in_bytes(max(
+        inode.size_in_bytes(),
+        offset + (total_written as u64),
+    ));
+    inode.set_inline_data(extent_tree.to_bytes());
+    inode.write(ext4).await?;
+
+    Ok(total_written)
 }

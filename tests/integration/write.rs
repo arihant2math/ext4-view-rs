@@ -8,7 +8,7 @@
 
 use ext4_view::{
     Ext4Error, File, FileType, FollowSymlinks, Inode, InodeCreationOptions,
-    InodeFlags, InodeMode, Path,
+    InodeFlags, InodeMode, Path, write_at,
 };
 use tokio;
 
@@ -192,6 +192,34 @@ async fn test_new_file_grow() {
     let mut file = File::open_inode(&fs, new_inode).unwrap();
     let data = b"Hello, world! This file will grow as we write to it.";
     let n = file.write_bytes(data).await.unwrap();
+    assert_eq!(n, data.len());
+    // Read back the inode and verify new length.
+    let inode = Inode::read(&fs, index).await.unwrap();
+    assert_eq!(inode.size_in_bytes(), data.len() as u64);
+    let mut file = File::open_inode(&fs, inode).unwrap();
+    let mut buf = vec![0u8; data.len()];
+    let n = file.read_bytes(&mut buf).await.unwrap();
+    assert_eq!(n, data.len());
+    assert_eq!(&buf, data);
+}
+
+#[tokio::test]
+async fn test_new_file_grow2() {
+    let fs = load_test_disk1_rw().await;
+    let mut new_inode = fs
+        .create_inode(InodeCreationOptions {
+            file_type: FileType::Regular,
+            mode: InodeMode::S_IRUSR | InodeMode::S_IWUSR | InodeMode::S_IFREG,
+            uid: 0,
+            gid: 0,
+            time: Default::default(),
+            flags: InodeFlags::INLINE_DATA,
+        })
+        .await
+        .unwrap();
+    let index = new_inode.index;
+    let data = b"Hello, world! This file will grow as we write to it.";
+    let n = write_at(&fs, &mut new_inode, data, 0).await.unwrap();
     assert_eq!(n, data.len());
     // Read back the inode and verify new length.
     let inode = Inode::read(&fs, index).await.unwrap();

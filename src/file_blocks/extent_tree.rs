@@ -348,7 +348,7 @@ impl ExtentTree {
     }
 
     /// Get the extent that contains the given block index, if any.
-    async fn find_extent(
+    pub(crate) async fn find_extent(
         &self,
         block_index: FileBlockIndex,
     ) -> Result<Option<Extent>, Ext4Error> {
@@ -766,11 +766,144 @@ impl ExtentTree {
 
     /// Insert a new extent. The new extent must not overlap existing extents.
     /// This will error if the new extent overlaps existing extents.
-    async fn insert_extent(
+    pub(crate) async fn insert_extent(
         &mut self,
         new_extent: Extent,
     ) -> Result<(), Ext4Error> {
-        todo!()
+        // Only handle the simplest case for now: the root node is an inline leaf.
+        if self.node.header.depth != 0 {
+            todo!()
+        }
+
+        let ExtentNodeEntries::Leaf(extents) = &mut self.node.entries else {
+            unreachable!();
+        };
+
+        // Empty tree: just insert.
+        if extents.is_empty() {
+            if 1 > usize_from_u32(u32::from(self.node.header.max_entries)) {
+                return Err(Ext4Error::NoSpace);
+            }
+            extents.push(new_extent);
+            self.node.header.num_entries = 1;
+            return Ok(());
+        }
+
+        let new_start = new_extent.block_within_file;
+        let new_end = new_start + FileBlockIndex::from(new_extent.num_blocks);
+
+        // Find insertion index (keep sorted by file-block start).
+        let mut insert_at = extents.len();
+        for (i, e) in extents.iter().enumerate() {
+            if e.block_within_file > new_start {
+                insert_at = i;
+                break;
+            }
+        }
+
+        // Check overlap with previous extent.
+        if insert_at > 0 {
+            let prev = extents[insert_at - 1];
+            let prev_start = prev.block_within_file;
+            let prev_end = prev_start + FileBlockIndex::from(prev.num_blocks);
+            if new_start < prev_end {
+                return Err(CorruptKind::ExtentBlock(self.inode).into());
+            }
+        }
+
+        // Check overlap with next extent.
+        if insert_at < extents.len() {
+            let next = extents[insert_at];
+            let next_start = next.block_within_file;
+            if new_end > next_start {
+                return Err(CorruptKind::ExtentBlock(self.inode).into());
+            }
+        }
+
+        // If we can't merge with a neighbor, we need an extra slot.
+        let can_merge_left = if insert_at > 0 {
+            let left = extents[insert_at - 1];
+            let left_end =
+                left.block_within_file + FileBlockIndex::from(left.num_blocks);
+            let left_phys_end =
+                left.start_block + FsBlockIndex::from(left.num_blocks as u32);
+            left_end == new_start
+                && left_phys_end == new_extent.start_block
+                && left.is_initialized == new_extent.is_initialized
+        } else {
+            false
+        };
+
+        let can_merge_right = if insert_at < extents.len() {
+            let right = extents[insert_at];
+            let phys_end = new_extent.start_block
+                + FsBlockIndex::from(new_extent.num_blocks as u32);
+            new_end == right.block_within_file
+                && phys_end == right.start_block
+                && right.is_initialized == new_extent.is_initialized
+        } else {
+            false
+        };
+
+        let max_entries =
+            usize_from_u32(u32::from(self.node.header.max_entries));
+        let needs_new_slot = !can_merge_left && !can_merge_right;
+        if needs_new_slot && extents.len() >= max_entries {
+            return Err(Ext4Error::NoSpace);
+        }
+
+        // Apply: merge where possible, otherwise insert.
+        if can_merge_left {
+            // Extend left to include new_extent.
+            // Copy out the right neighbor (if any) before we take a mutable borrow of `extents`.
+            let right_for_possible_merge = if can_merge_right {
+                Some(extents[insert_at])
+            } else {
+                None
+            };
+
+            let left = &mut extents[insert_at - 1];
+            let new_len = (left.num_blocks as u32)
+                .checked_add(new_extent.num_blocks as u32)
+                .ok_or(Ext4Error::NoSpace)?;
+            left.num_blocks = u16::try_from(new_len)
+                .map_err(|_| CorruptKind::ExtentBlock(self.inode))?;
+
+            // Maybe also merge with right neighbor now.
+            if let Some(right) = right_for_possible_merge {
+                // After merging into left, right is still at index insert_at.
+                let left_phys_end = left.start_block
+                    + FsBlockIndex::from(left.num_blocks as u32);
+                let left_end = left.block_within_file
+                    + FileBlockIndex::from(left.num_blocks);
+                if left_end == right.block_within_file
+                    && left_phys_end == right.start_block
+                    && left.is_initialized == right.is_initialized
+                {
+                    let combined = (left.num_blocks as u32)
+                        .checked_add(right.num_blocks as u32)
+                        .ok_or(Ext4Error::NoSpace)?;
+                    left.num_blocks = u16::try_from(combined)
+                        .map_err(|_| CorruptKind::ExtentBlock(self.inode))?;
+                    extents.remove(insert_at);
+                }
+            }
+        } else if can_merge_right {
+            // Merge into right by extending it to the left.
+            let right = &mut extents[insert_at];
+            right.block_within_file = new_start;
+            right.start_block = new_extent.start_block;
+            let new_len = (right.num_blocks as u32)
+                .checked_add(new_extent.num_blocks as u32)
+                .ok_or(Ext4Error::NoSpace)?;
+            right.num_blocks = u16::try_from(new_len)
+                .map_err(|_| CorruptKind::ExtentBlock(self.inode))?;
+        } else {
+            extents.insert(insert_at, new_extent);
+        }
+
+        self.node.header.num_entries = u16::try_from(extents.len()).unwrap();
+        Ok(())
     }
 
     /// Remove all extents that overlap file-block range [start, start+num_blocks)
@@ -1033,7 +1166,7 @@ impl ExtentTree {
 
     /// Try to merge adjacency-eligible extents (same start_block+num or both initialized/uninitialized adjacent)
     /// starting at `hint_block` to reduce fragmentation.
-    async fn try_merge_adjacent(
+    pub(crate) async fn try_merge_adjacent(
         &mut self,
         hint_block: FileBlockIndex,
     ) -> Result<(), Ext4Error> {
