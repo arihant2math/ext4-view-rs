@@ -219,9 +219,18 @@ async fn test_new_file_grow2() {
         .unwrap();
     let index = new_inode.index;
     let data = b"Hello, world! This file will grow as we write to it.";
+    let _ = write_at(&fs, &mut new_inode, data, 0).await.unwrap();
+    let data = b"Hello, world! This file will grow as we write to it.";
     let n = write_at(&fs, &mut new_inode, data, 0).await.unwrap();
     assert_eq!(n, data.len());
+    let replacement_data = b" and can also be appended to.";
+    let n =
+        write_at(&fs, &mut new_inode, replacement_data, data.len() as u64 - 1)
+            .await
+            .unwrap();
+    assert_eq!(n, replacement_data.len());
     // Read back the inode and verify new length.
+    let data = b"Hello, world! This file will grow as we write to it and can also be appended to.";
     let inode = Inode::read(&fs, index).await.unwrap();
     assert_eq!(inode.size_in_bytes(), data.len() as u64);
     let mut file = File::open_inode(&fs, inode).unwrap();
