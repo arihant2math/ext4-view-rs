@@ -67,7 +67,11 @@ pub(crate) enum AtomicTruncatedChecksum {
 impl AtomicTruncatedChecksum {
     fn update(&self, checksum: u32) {
         match self {
-            Self::Truncated(c) => c.store(checksum as u16, Ordering::Relaxed),
+            Self::Truncated(c) =>
+            {
+                #[expect(clippy::as_conversions)]
+                c.store(checksum as u16, Ordering::Relaxed)
+            }
             Self::Full(c) => c.store(checksum, Ordering::Relaxed),
         }
     }

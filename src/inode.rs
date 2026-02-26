@@ -7,12 +7,14 @@
 // except according to those terms.
 
 use crate::Ext4;
+use crate::block_group::BlockGroupIndex;
 use crate::block_index::FsBlockIndex;
 use crate::checksum::Checksum;
 use crate::error::{CorruptKind, Ext4Error};
 use crate::file_type::FileType;
 use crate::metadata::Metadata;
 use crate::path::PathBuf;
+use crate::superblock::Superblock;
 use crate::util::{
     read_u16le, read_u32le, u32_from_hilo, u32_to_hilo, u64_from_hilo,
     u64_to_hilo, write_u16le, write_u32le,
@@ -22,8 +24,6 @@ use alloc::vec::Vec;
 use bitflags::bitflags;
 use core::num::NonZeroU32;
 use core::time::Duration;
-use crate::block_group::BlockGroupIndex;
-use crate::superblock::Superblock;
 
 /// Inode index.
 ///
@@ -619,7 +619,10 @@ impl Inode {
     }
 }
 
-pub(crate) fn get_inode_block_group_location(sb: &Superblock, inode: InodeIndex) -> Result<(BlockGroupIndex, u32), Ext4Error> {
+pub(crate) fn get_inode_block_group_location(
+    sb: &Superblock,
+    inode: InodeIndex,
+) -> Result<(BlockGroupIndex, u32), Ext4Error> {
     let inode_minus_1 = inode.get().checked_sub(1).unwrap();
 
     let block_group_index = inode_minus_1 / sb.inodes_per_block_group();
@@ -637,10 +640,10 @@ fn get_inode_location(
 ) -> Result<(FsBlockIndex, u32), Ext4Error> {
     let sb = &ext4.0.superblock;
 
-    let (block_group_index, index_within_group) = get_inode_block_group_location(sb, inode)?;
+    let (block_group_index, index_within_group) =
+        get_inode_block_group_location(sb, inode)?;
 
     let group = ext4.get_block_group_descriptor(block_group_index);
-
 
     let err = || CorruptKind::InodeLocation {
         inode,

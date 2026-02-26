@@ -401,7 +401,7 @@ impl Ext4 {
             writer
                 .write(
                     block_index * self.0.superblock.block_size().to_u64()
-                        + offset_within_block as u64,
+                        + u64::from(offset_within_block),
                     src,
                 )
                 .await
@@ -469,13 +469,10 @@ impl Ext4 {
         &self,
         block_index: FsBlockIndex,
     ) -> Result<bool, Ext4Error> {
-        let block_group_index = u64::from(block_index)
-            / NonZeroU64::from(self.0.superblock.blocks_per_group());
-        let bitmap_handle =
-            self.get_block_bitmap_handle(block_group_index as u32);
-        let block_offset = block_index
-            % NonZeroU64::from(self.0.superblock.blocks_per_group());
-        bitmap_handle.query(block_offset as u32, self).await
+        let (block_group_index, block_offset) =
+            self.block_block_group_location(block_index)?;
+        let bitmap_handle = self.get_block_bitmap_handle(block_group_index);
+        bitmap_handle.query(block_offset, self).await
     }
 
     pub(crate) async fn alloc_inode(
@@ -511,19 +508,25 @@ impl Ext4 {
                 inode_bitmap_handle.set(inode_num, true, self).await?;
                 self.update_inode_bitmap_checksum(bg_id, inode_bitmap_handle)
                     .await?;
-                bg.set_free_inodes_count(free_inodes - 1);
+                bg.set_free_inodes_count(free_inodes.checked_sub(1).unwrap());
 
                 if matches!(inode_type, FileType::Directory) {
                     bg.set_used_dirs_count(used_dirs.saturating_add(1));
                 }
                 bg.write(self).await?;
                 let total_free_inodes = self.0.superblock.free_inodes_count();
-                self.0
-                    .superblock
-                    .set_free_inodes_count(total_free_inodes - 1);
+                self.0.superblock.set_free_inodes_count(
+                    total_free_inodes.checked_sub(1).unwrap(),
+                );
                 self.0.superblock.write(self).await?;
 
-                return Ok(InodeIndex::try_from(inode_num + self.0.superblock.inodes_per_block_group().get() * bg_id + 1).unwrap());
+                return Ok(InodeIndex::try_from(
+                    inode_num
+                        + self.0.superblock.inodes_per_block_group().get()
+                            * bg_id
+                        + 1,
+                )
+                .unwrap());
             }
 
             // Will never overflow
@@ -536,10 +539,8 @@ impl Ext4 {
         &self,
         inode: Inode,
     ) -> Result<(), Ext4Error> {
-        let (block_group_index, inode_offset) = get_inode_block_group_location(
-            &self.0.superblock,
-            inode.index,
-        )?;
+        let (block_group_index, inode_offset) =
+            get_inode_block_group_location(&self.0.superblock, inode.index)?;
         let inode_bitmap_handle =
             self.get_inode_bitmap_handle(block_group_index);
         inode_bitmap_handle.set(inode_offset, false, self).await?;
@@ -566,6 +567,22 @@ impl Ext4 {
         Ok(())
     }
 
+    pub(crate) fn block_block_group_location(
+        &self,
+        block_index: FsBlockIndex,
+    ) -> Result<(BlockGroupIndex, u32), Ext4Error> {
+        let block_group_index = u64::from(block_index)
+            / NonZeroU64::from(self.0.superblock.blocks_per_group());
+        let block_offset = block_index
+            % NonZeroU64::from(self.0.superblock.blocks_per_group());
+        Ok((
+            // TODO: Wrong error?
+            BlockGroupIndex::try_from(block_group_index)
+                .map_err(|_| CorruptKind::TooManyBlockGroups)?,
+            block_offset as u32,
+        ))
+    }
+
     #[expect(unused)]
     pub(crate) async fn alloc_block(
         &self,
@@ -573,9 +590,7 @@ impl Ext4 {
     ) -> Result<FsBlockIndex, Ext4Error> {
         let mut bg_id = (inode.index.get() - 1)
             / self.0.superblock.inodes_per_block_group();
-        let mut bg_count = (self.0.superblock.blocks_count()
-            / NonZeroU64::from(self.0.superblock.blocks_per_group()))
-            as u32;
+        let mut bg_count = self.0.superblock.num_block_groups();
         let mut rewind = false;
         while bg_id <= bg_count {
             if bg_id == bg_count {
@@ -603,7 +618,9 @@ impl Ext4 {
                 block_bitmap_handle.set(block_num, true, self).await?;
                 self.update_block_bitmap_checksum(bg_id, block_bitmap_handle)
                     .await?;
-                bg.set_free_blocks_count(free_blocks - 1u32);
+                bg.set_free_blocks_count(
+                    free_blocks.checked_sub(1u32).unwrap(),
+                );
                 bg.write(self).await?;
 
                 // Zero out the new block
@@ -628,15 +645,11 @@ impl Ext4 {
         block_index: FsBlockIndex,
     ) -> Result<(), Ext4Error> {
         assert_ne!(block_index, 0);
-        let block_group_index = u32::try_from(block_index
-            / NonZeroU64::from(self.0.superblock.blocks_per_group())).unwrap();
+        let (block_group_index, block_offset) =
+            self.block_block_group_location(block_index)?;
         let block_bitmap_handle =
             self.get_block_bitmap_handle(block_group_index);
-        let block_offset =
-            block_index % u64::from(self.0.superblock.blocks_per_group().get());
-        block_bitmap_handle
-            .set(block_offset as u32, false, self)
-            .await?;
+        block_bitmap_handle.set(block_offset, false, self).await?;
         self.update_block_bitmap_checksum(
             block_group_index,
             block_bitmap_handle,
