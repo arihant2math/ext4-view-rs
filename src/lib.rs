@@ -665,8 +665,6 @@ impl Ext4 {
                     * NonZeroU64::from(self.0.superblock.blocks_per_group())
                         .get())
                     + u64::from(block_num);
-                let zeroes = vec![0; self.0.superblock.block_size().to_usize()];
-                self.write_to_block(block_index, 0, &zeroes).await?;
 
                 return Ok(block_index);
             }
@@ -725,16 +723,29 @@ impl Ext4 {
                     * NonZeroU64::from(self.0.superblock.blocks_per_group())
                         .get())
                     + u64::from(block_num);
-                // Zero out the new blocks
-                let zeroes = vec![0; self.0.superblock.block_size().to_usize()];
-                for i in 0..num_blocks.get() {
-                    self.write_to_block(block_index + u64::from(i), 0, &zeroes)
-                        .await?;
-                }
                 return Ok(block_index);
             }
         }
         Err(Ext4Error::NoSpace)
+    }
+
+    #[expect(unused)]
+    pub(crate) async fn clear_block(&self, block_index: FsBlockIndex) -> Result<(), Ext4Error> {
+        let zeroes = vec![0; self.0.superblock.block_size().to_usize()];
+        self.write_to_block(block_index, 0, &zeroes).await
+    }
+
+    pub(crate) async fn clear_blocks(
+        &self,
+        block_index: FsBlockIndex,
+        num_blocks: NonZeroU32,
+    ) -> Result<(), Ext4Error> {
+        let zeroes = vec![0; self.0.superblock.block_size().to_usize()];
+        for i in 0..num_blocks.get() {
+            self.write_to_block(block_index + u64::from(i), 0, &zeroes)
+                .await?;
+        }
+        Ok(())
     }
 
     pub(crate) async fn free_block(

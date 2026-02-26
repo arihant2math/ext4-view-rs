@@ -204,12 +204,14 @@ impl ExtentNodeEntries {
 
 #[derive(Clone)]
 pub(crate) struct ExtentNode {
+    block: Option<FsBlockIndex>,
     header: NodeHeader,
     entries: ExtentNodeEntries,
 }
 
 impl ExtentNode {
     fn from_bytes(
+        block: Option<FsBlockIndex>,
         data: &[u8],
         inode: InodeIndex,
         checksum_base: Checksum,
@@ -229,7 +231,7 @@ impl ExtentNode {
                 return Err(CorruptKind::ExtentChecksum(inode).into());
             }
         }
-        Ok(Self { header, entries })
+        Ok(Self { block, header, entries })
     }
 
     pub(crate) fn to_bytes(&self, checksum_base: Option<Checksum>) -> Vec<u8> {
@@ -290,6 +292,7 @@ impl ExtentTree {
             ext4,
             inode: inode.index,
             node: ExtentNode {
+                block: None,
                 header: NodeHeader {
                     num_entries: 0,
                     max_entries: 4,
@@ -323,7 +326,7 @@ impl ExtentTree {
         Ok(Self {
             ext4,
             inode: inode.index,
-            node: ExtentNode { header, entries },
+            node: ExtentNode { block: None, header, entries },
             checksum_base: inode.checksum_base().clone(),
         })
     }
@@ -367,6 +370,7 @@ impl ExtentTree {
                     let next_node_data =
                         self.ext4.read_block(next_node_block).await?;
                     node = ExtentNode::from_bytes(
+                        Some(next_node_block),
                         &next_node_data,
                         self.inode,
                         self.checksum_base.clone(),
@@ -414,6 +418,7 @@ impl ExtentTree {
                     let next_node_data =
                         self.ext4.read_block(next_node_block).await?;
                     node = ExtentNode::from_bytes(
+                        Some(next_node_block),
                         &next_node_data,
                         self.inode,
                         self.checksum_base.clone(),
@@ -435,7 +440,13 @@ impl ExtentTree {
         // Otherwise, panic for now
         let last_allocated = self.last_allocated_extent().await?;
         if let Some((path, last_extent)) = last_allocated {
-            if let ExtentNodeEntries::Leaf(extents) = &self.node.entries {
+            if last_extent.block_within_file + last_extent.num_blocks as u32 >= start {
+                panic!("can't allocate overlapping extent");
+            }
+            if !last_extent.is_initialized && initialized {
+                panic!("can't allocate initialized extent after uninitialized extent");
+            }
+            if let ExtentNodeEntries::Leaf(extents) = &path.last().unwrap().entries {
                 if extents.len()
                     < usize_from_u32(u32::from(self.node.header.max_entries))
                 {
@@ -443,6 +454,11 @@ impl ExtentTree {
                         .ext4
                         .alloc_contiguous_blocks(self.inode, amount)
                         .await?;
+                    if initialized {
+                        self.ext4
+                            .clear_blocks(start_block, amount)
+                            .await?;
+                    }
                     self.node
                         .push_extent(Extent {
                             block_within_file: start,
@@ -453,6 +469,8 @@ impl ExtentTree {
                         .unwrap();
                     return Ok(());
                 }
+            } else {
+                unreachable!()
             }
             todo!()
         } else {
@@ -460,6 +478,11 @@ impl ExtentTree {
                 .ext4
                 .alloc_contiguous_blocks(self.inode, amount)
                 .await?;
+            if initialized {
+                self.ext4
+                    .clear_blocks(start_block, amount)
+                    .await?;
+            }
             self.node
                 .push_extent(Extent {
                     block_within_file: start,
@@ -477,14 +500,9 @@ impl ExtentTree {
         start: FileBlockIndex,
         amount: NonZeroU32,
     ) -> Result<(), Ext4Error> {
-        // Try and get next extent
-        let existing_extent =
-            self.get_extent(FileBlockIndex::from(start)).await?;
-        if let Some(existing_extent) = existing_extent {
-            todo!("Implement splitting extents, etc.")
-        } else {
-            self.allocate(start, amount, true).await?;
-            Ok(())
+        if let Some(extent) = self.get_extent(start).await? {
+            todo!()
         }
+        self.allocate(start, amount, true).await
     }
 }
