@@ -742,8 +742,12 @@ impl Ext4 {
     ) -> Result<(FsBlockIndex, NonZeroU32), Ext4Error> {
         // TODO: very inefficient on full disk
         for i in (0..num_blocks.get()).rev() {
-            if let Ok(block_index) =
-                self.alloc_contiguous_blocks(inode_index, NonZeroU32::new(i).unwrap()).await
+            if let Ok(block_index) = self
+                .alloc_contiguous_blocks(
+                    inode_index,
+                    NonZeroU32::new(i).unwrap(),
+                )
+                .await
             {
                 return Ok((block_index, NonZeroU32::new(i).unwrap()));
             }
@@ -752,7 +756,10 @@ impl Ext4 {
     }
 
     #[expect(unused)]
-    pub(crate) async fn clear_block(&self, block_index: FsBlockIndex) -> Result<(), Ext4Error> {
+    pub(crate) async fn clear_block(
+        &self,
+        block_index: FsBlockIndex,
+    ) -> Result<(), Ext4Error> {
         let zeroes = vec![0; self.0.superblock.block_size().to_usize()];
         self.write_to_block(block_index, 0, &zeroes).await
     }
