@@ -216,11 +216,7 @@ impl Extents {
             let start_block =
                 u64_from_hilo(u32::from(ee_start_hi), ee_start_low);
 
-            return Ok(Some(Extent {
-                block_within_file: ee_block,
-                start_block,
-                num_blocks: ee_len,
-            }));
+            return Ok(Some(Extent::new(ee_block, start_block, ee_len)));
         } else {
             let ei_leaf_lo = read_u32le(entry, 4);
             let ei_leaf_hi = read_u16le(entry, 8);

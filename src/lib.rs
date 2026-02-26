@@ -136,6 +136,7 @@ mod superblock;
 mod util;
 mod uuid;
 
+mod file_blocks;
 #[cfg(all(test, feature = "std"))]
 mod test_util;
 

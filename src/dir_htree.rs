@@ -681,18 +681,7 @@ mod tests {
             .await;
         assert_eq!(
             extents,
-            [
-                Extent {
-                    start_block: 2543,
-                    num_blocks: 23,
-                    block_within_file: 0,
-                },
-                Extent {
-                    start_block: 11,
-                    num_blocks: 47,
-                    block_within_file: 23,
-                }
-            ]
+            [Extent::new(0, 2543, 23), Extent::new(23, 11, 47),]
         );
 
         // Blocks in extent 0.
