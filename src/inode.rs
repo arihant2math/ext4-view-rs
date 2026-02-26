@@ -22,6 +22,8 @@ use alloc::vec::Vec;
 use bitflags::bitflags;
 use core::num::NonZeroU32;
 use core::time::Duration;
+use crate::block_group::BlockGroupIndex;
+use crate::superblock::Superblock;
 
 /// Inode index.
 ///
@@ -617,6 +619,15 @@ impl Inode {
     }
 }
 
+pub(crate) fn get_inode_block_group_location(sb: &Superblock, inode: InodeIndex) -> Result<(BlockGroupIndex, u32), Ext4Error> {
+    let inode_minus_1 = inode.get().checked_sub(1).unwrap();
+
+    let block_group_index = inode_minus_1 / sb.inodes_per_block_group();
+    let index_within_group = inode_minus_1 % sb.inodes_per_block_group();
+
+    Ok((block_group_index, index_within_group))
+}
+
 /// Get an inode's location: block index and offset within that block.
 /// Note that this is the location of the inode itself, not the file
 /// data associated with the inode.
@@ -626,13 +637,10 @@ fn get_inode_location(
 ) -> Result<(FsBlockIndex, u32), Ext4Error> {
     let sb = &ext4.0.superblock;
 
-    let inode_minus_1 = inode.get().checked_sub(1).unwrap();
-
-    let block_group_index = inode_minus_1 / sb.inodes_per_block_group();
+    let (block_group_index, index_within_group) = get_inode_block_group_location(sb, inode)?;
 
     let group = ext4.get_block_group_descriptor(block_group_index);
 
-    let index_within_group = inode_minus_1 % sb.inodes_per_block_group();
 
     let err = || CorruptKind::InodeLocation {
         inode,

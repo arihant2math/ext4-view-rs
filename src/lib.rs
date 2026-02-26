@@ -151,7 +151,7 @@ use core::fmt::{self, Debug, Formatter};
 use core::num::NonZeroU64;
 use error::CorruptKind;
 use features::ReadOnlyCompatibleFeatures;
-use inode::InodeIndex;
+use inode::{InodeIndex, get_inode_block_group_location};
 use iters::file_blocks::FileBlocks;
 use journal::Journal;
 use superblock::Superblock;
@@ -523,7 +523,7 @@ impl Ext4 {
                     .set_free_inodes_count(total_free_inodes - 1);
                 self.0.superblock.write(self).await?;
 
-                return Ok(InodeIndex::try_from(inode_num).unwrap());
+                return Ok(InodeIndex::try_from(inode_num + self.0.superblock.inodes_per_block_group().get() * bg_id + 1).unwrap());
             }
 
             // Will never overflow
@@ -536,12 +536,12 @@ impl Ext4 {
         &self,
         inode: Inode,
     ) -> Result<(), Ext4Error> {
-        let block_group_index = (inode.index.get() - 1)
-            / self.0.superblock.inodes_per_block_group();
+        let (block_group_index, inode_offset) = get_inode_block_group_location(
+            &self.0.superblock,
+            inode.index,
+        )?;
         let inode_bitmap_handle =
             self.get_inode_bitmap_handle(block_group_index);
-        let inode_offset = (inode.index.get() - 1)
-            % self.0.superblock.inodes_per_block_group();
         inode_bitmap_handle.set(inode_offset, false, self).await?;
         self.update_inode_bitmap_checksum(
             block_group_index,
@@ -628,22 +628,22 @@ impl Ext4 {
         block_index: FsBlockIndex,
     ) -> Result<(), Ext4Error> {
         assert_ne!(block_index, 0);
-        let block_group_index = block_index
-            / NonZeroU64::from(self.0.superblock.blocks_per_group());
+        let block_group_index = u32::try_from(block_index
+            / NonZeroU64::from(self.0.superblock.blocks_per_group())).unwrap();
         let block_bitmap_handle =
-            self.get_block_bitmap_handle(block_group_index as u32);
+            self.get_block_bitmap_handle(block_group_index);
         let block_offset =
             block_index % u64::from(self.0.superblock.blocks_per_group().get());
         block_bitmap_handle
             .set(block_offset as u32, false, self)
             .await?;
         self.update_block_bitmap_checksum(
-            block_group_index as u32,
+            block_group_index,
             block_bitmap_handle,
         )
         .await?;
         // Set number of free blocks in block group
-        let bg = self.get_block_group_descriptor(block_group_index as u32);
+        let bg = self.get_block_group_descriptor(block_group_index);
         let free_blocks = bg.free_blocks_count();
         bg.set_free_blocks_count(free_blocks.saturating_add(1));
         bg.write(self).await?;
