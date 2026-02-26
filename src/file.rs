@@ -43,13 +43,6 @@ impl File {
     ) -> Result<Self, Ext4Error> {
         let inode = fs.path_to_inode(path, FollowSymlinks::All).await?;
 
-        if inode.file_type().is_dir() {
-            return Err(Ext4Error::IsADirectory);
-        }
-        if !inode.file_type().is_regular_file() {
-            return Err(Ext4Error::IsASpecialFile);
-        }
-
         Self::open_inode(fs, inode)
     }
 
@@ -57,6 +50,12 @@ impl File {
     /// type of `inode` to be opened, including directories and
     /// symlinks. This is used by `Ext4::read_inode_file`.
     pub fn open_inode(fs: &Ext4, inode: Inode) -> Result<Self, Ext4Error> {
+        if inode.file_type().is_dir() {
+            return Err(Ext4Error::IsADirectory);
+        }
+        if !inode.file_type().is_regular_file() {
+            return Err(Ext4Error::IsASpecialFile);
+        }
         Ok(Self {
             fs: fs.clone(),
             position: 0,
