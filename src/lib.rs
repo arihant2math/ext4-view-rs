@@ -732,6 +732,25 @@ impl Ext4 {
         Err(Ext4Error::NoSpace)
     }
 
+    /// Tries to allocate `num_blocks` contiguous blocks
+    /// If it can't find `num_blocks` contiguous blocks, it allocates as many as possible instead
+    #[expect(unused)]
+    pub(crate) async fn try_alloc_contiguous_blocks(
+        &self,
+        inode_index: InodeIndex,
+        num_blocks: NonZeroU32,
+    ) -> Result<(FsBlockIndex, NonZeroU32), Ext4Error> {
+        // TODO: very inefficient on full disk
+        for i in (0..num_blocks.get()).rev() {
+            if let Ok(block_index) =
+                self.alloc_contiguous_blocks(inode_index, NonZeroU32::new(i).unwrap()).await
+            {
+                return Ok((block_index, NonZeroU32::new(i).unwrap()));
+            }
+        }
+        Err(Ext4Error::NoSpace)
+    }
+
     #[expect(unused)]
     pub(crate) async fn clear_block(&self, block_index: FsBlockIndex) -> Result<(), Ext4Error> {
         let zeroes = vec![0; self.0.superblock.block_size().to_usize()];
