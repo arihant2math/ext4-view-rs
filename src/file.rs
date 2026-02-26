@@ -420,7 +420,7 @@ impl Debug for File {
 pub async fn read_at(
     ext4: &Ext4,
     inode: &Inode,
-    mut buf: &mut [u8],
+    buf: &mut [u8],
     offset: u64,
 ) -> Result<usize, Ext4Error> {
     // Open the file and seek to the desired offset, then read into the buffer.
