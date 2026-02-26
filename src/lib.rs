@@ -122,6 +122,7 @@ mod error;
 mod extent;
 mod features;
 mod file;
+mod file_blocks;
 mod file_type;
 mod format;
 mod inode;
@@ -136,7 +137,6 @@ mod superblock;
 mod util;
 mod uuid;
 
-mod file_blocks;
 #[cfg(all(test, feature = "std"))]
 mod test_util;
 
