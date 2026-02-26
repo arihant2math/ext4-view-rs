@@ -508,7 +508,6 @@ pub async fn write_at(
 
     async fn write_into_newly_allocated_extent(
         ext4: &Ext4,
-        inode: &Inode,
         extent: &Extent,
         offset_in_block: usize,
         buf: &[u8],
@@ -737,7 +736,6 @@ pub async fn write_at(
                 let slice_len = core::cmp::min(want_bytes, have_bytes);
                 total_written += write_into_newly_allocated_extent(
                     ext4,
-                    inode,
                     &new_extent,
                     start_offset_in_block,
                     &buf[buf_pos..buf_pos + slice_len],
