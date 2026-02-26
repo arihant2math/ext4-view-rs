@@ -291,13 +291,6 @@ pub(crate) enum CorruptKind {
     /// An inode is too small.
     InodeTruncated { inode: InodeIndex, size: usize },
 
-    /// An inode's block group is invalid.
-    InodeBlockGroup {
-        inode: InodeIndex,
-        block_group: u32,
-        num_block_groups: usize,
-    },
-
     /// Failed to calculate an inode's location.
     ///
     /// This error can be returned by various calculations in
@@ -480,16 +473,6 @@ impl Display for CorruptKind {
             }
             Self::InodeTruncated { inode, size } => {
                 write!(f, "inode {inode} is truncated: size={size}")
-            }
-            Self::InodeBlockGroup {
-                inode,
-                block_group,
-                num_block_groups,
-            } => {
-                write!(
-                    f,
-                    "inode {inode} has an invalid block group index: block_group={block_group}, num_block_groups={num_block_groups}"
-                )
             }
             Self::InodeLocation {
                 inode,

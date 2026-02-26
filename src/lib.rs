@@ -412,15 +412,30 @@ impl Ext4 {
         Ok(())
     }
 
-    fn get_block_bitmap_handle(&self, block_group_index: BlockGroupIndex) -> BitmapHandle {
-        let block_group =
-            &self.0.block_group_descriptors[usize_from_u32(block_group_index)];
+    fn get_block_group_descriptor(
+        &self,
+        block_group_index: BlockGroupIndex,
+    ) -> &BlockGroupDescriptor {
+        assert!(
+            usize_from_u32(block_group_index)
+                < self.0.block_group_descriptors.len()
+        );
+        &self.0.block_group_descriptors[usize_from_u32(block_group_index)]
+    }
+
+    fn get_block_bitmap_handle(
+        &self,
+        block_group_index: BlockGroupIndex,
+    ) -> BitmapHandle {
+        let block_group = self.get_block_group_descriptor(block_group_index);
         BitmapHandle::new(block_group.block_bitmap_block())
     }
 
-    fn get_inode_bitmap_handle(&self, block_group_index: BlockGroupIndex) -> BitmapHandle {
-        let block_group =
-            &self.0.block_group_descriptors[usize_from_u32(block_group_index)];
+    fn get_inode_bitmap_handle(
+        &self,
+        block_group_index: BlockGroupIndex,
+    ) -> BitmapHandle {
+        let block_group = self.get_block_group_descriptor(block_group_index);
         BitmapHandle::new(block_group.inode_bitmap_block())
     }
 
@@ -430,11 +445,9 @@ impl Ext4 {
         bitmap_handle: BitmapHandle,
     ) -> Result<(), Ext4Error> {
         let checksum = bitmap_handle.calc_checksum(self).await?;
-        self.0.block_group_descriptors[usize_from_u32(block_group_index)]
-            .set_block_bitmap_checksum(checksum);
-        self.0.block_group_descriptors[usize_from_u32(block_group_index)]
-            .write(self)
-            .await?;
+        let block_group = self.get_block_group_descriptor(block_group_index);
+        block_group.set_block_bitmap_checksum(checksum);
+        block_group.write(self).await?;
         Ok(())
     }
 
@@ -444,11 +457,9 @@ impl Ext4 {
         bitmap_handle: BitmapHandle,
     ) -> Result<(), Ext4Error> {
         let checksum = bitmap_handle.calc_checksum(self).await?;
-        self.0.block_group_descriptors[usize_from_u32(block_group_index)]
-            .set_inode_bitmap_checksum(checksum);
-        self.0.block_group_descriptors[usize_from_u32(block_group_index)]
-            .write(self)
-            .await?;
+        let block_group = self.get_block_group_descriptor(block_group_index);
+        block_group.set_inode_bitmap_checksum(checksum);
+        block_group.write(self).await?;
         Ok(())
     }
 
@@ -472,8 +483,7 @@ impl Ext4 {
         inode_type: FileType,
     ) -> Result<InodeIndex, Ext4Error> {
         let mut bg_id = 0;
-        let mut bg_count = self.0.superblock.blocks_count()
-            / NonZeroU64::from(self.0.superblock.blocks_per_group());
+        let mut bg_count = self.0.superblock.num_block_groups();
         let mut rewind = false;
         while bg_id <= bg_count {
             if bg_id == bg_count {
@@ -486,26 +496,21 @@ impl Ext4 {
                 continue;
             }
 
-            let bg =
-                self.0.block_group_descriptors.get(bg_id as usize).unwrap();
+            let bg = self.get_block_group_descriptor(bg_id);
 
             let free_inodes = bg.free_inodes_count();
             let used_dirs = bg.used_dirs_count();
 
             if free_inodes > 0 {
-                let inode_bitmap_handle =
-                    self.get_inode_bitmap_handle(bg_id as u32);
+                let inode_bitmap_handle = self.get_inode_bitmap_handle(bg_id);
                 let Some(inode_num) =
                     inode_bitmap_handle.find_first(false, self).await?
                 else {
                     continue;
                 };
                 inode_bitmap_handle.set(inode_num, true, self).await?;
-                self.update_inode_bitmap_checksum(
-                    bg_id as u32,
-                    inode_bitmap_handle,
-                )
-                .await?;
+                self.update_inode_bitmap_checksum(bg_id, inode_bitmap_handle)
+                    .await?;
                 bg.set_free_inodes_count(free_inodes - 1);
 
                 if matches!(inode_type, FileType::Directory) {
@@ -544,11 +549,7 @@ impl Ext4 {
         )
         .await?;
         // Set number of free inodes in block group
-        let bg = self
-            .0
-            .block_group_descriptors
-            .get(usize_from_u32(block_group_index))
-            .unwrap();
+        let bg = self.get_block_group_descriptor(block_group_index);
         let free_inodes = bg.free_inodes_count();
         bg.set_free_inodes_count(free_inodes.saturating_add(1));
         if inode.file_type().is_dir() {
@@ -587,11 +588,7 @@ impl Ext4 {
                 continue;
             }
 
-            let bg = self
-                .0
-                .block_group_descriptors
-                .get(usize_from_u32(bg_id))
-                .unwrap();
+            let bg = self.get_block_group_descriptor(bg_id);
 
             let free_blocks = bg.free_blocks_count();
 
@@ -646,11 +643,7 @@ impl Ext4 {
         )
         .await?;
         // Set number of free blocks in block group
-        let bg = self
-            .0
-            .block_group_descriptors
-            .get(block_group_index as usize)
-            .unwrap();
+        let bg = self.get_block_group_descriptor(block_group_index as u32);
         let free_blocks = bg.free_blocks_count();
         bg.set_free_blocks_count(free_blocks.saturating_add(1));
         bg.write(self).await?;

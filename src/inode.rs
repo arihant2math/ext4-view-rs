@@ -15,7 +15,7 @@ use crate::metadata::Metadata;
 use crate::path::PathBuf;
 use crate::util::{
     read_u16le, read_u32le, u32_from_hilo, u32_to_hilo, u64_from_hilo,
-    u64_to_hilo, usize_from_u32, write_u16le, write_u32le,
+    u64_to_hilo, write_u16le, write_u32le,
 };
 use alloc::vec;
 use alloc::vec::Vec;
@@ -626,20 +626,11 @@ fn get_inode_location(
 ) -> Result<(FsBlockIndex, u32), Ext4Error> {
     let sb = &ext4.0.superblock;
 
-    // OK to unwrap: `inode` is nonzero.
     let inode_minus_1 = inode.get().checked_sub(1).unwrap();
 
     let block_group_index = inode_minus_1 / sb.inodes_per_block_group();
 
-    let group = ext4
-        .0
-        .block_group_descriptors
-        .get(usize_from_u32(block_group_index))
-        .ok_or(CorruptKind::InodeBlockGroup {
-            inode,
-            block_group: block_group_index,
-            num_block_groups: ext4.0.block_group_descriptors.len(),
-        })?;
+    let group = ext4.get_block_group_descriptor(block_group_index);
 
     let index_within_group = inode_minus_1 % sb.inodes_per_block_group();
 
