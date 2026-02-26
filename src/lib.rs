@@ -597,6 +597,7 @@ impl Ext4 {
         ))
     }
 
+    #[expect(unused)]
     pub(crate) async fn alloc_block_num(
         &self,
         block: FsBlockIndex,
