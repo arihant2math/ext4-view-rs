@@ -84,6 +84,33 @@ impl BitmapHandle {
         Ok(None)
     }
 
+    /// Find the first `n` bits in the bitmap with value `value`, and return the initial index.
+    /// Returns `Ok(None)` if no such sequence of bits is found.
+    pub(crate) async fn find_first_n(
+        &self,
+        n: u32,
+        value: bool,
+        ext4: &Ext4,
+    ) -> Result<Option<u32>, Ext4Error> {
+        let mut dst = [0; 1];
+        let mut count = 0;
+        for byte_index in 0..ext4.0.superblock.block_size().to_u32() {
+            ext4.read_from_block(self.block, byte_index, &mut dst)
+                .await?;
+            for bit_index in 0..8 {
+                if ((dst[0] & (1 << bit_index)) != 0) == value {
+                    count += 1;
+                    if count == n {
+                        return Ok(Some(byte_index * 8 + bit_index + 1 - n));
+                    }
+                } else {
+                    count = 0;
+                }
+            }
+        }
+        Ok(None)
+    }
+
     pub(crate) async fn calc_checksum(
         &self,
         ext4: &Ext4,

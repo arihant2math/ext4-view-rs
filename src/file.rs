@@ -50,12 +50,6 @@ impl File {
     /// type of `inode` to be opened, including directories and
     /// symlinks. This is used by `Ext4::read_inode_file`.
     pub fn open_inode(fs: &Ext4, inode: Inode) -> Result<Self, Ext4Error> {
-        if inode.file_type().is_dir() {
-            return Err(Ext4Error::IsADirectory);
-        }
-        if !inode.file_type().is_regular_file() {
-            return Err(Ext4Error::IsASpecialFile);
-        }
         Ok(Self {
             fs: fs.clone(),
             position: 0,
@@ -282,7 +276,6 @@ impl File {
         let block_index = if let Some(block_index) = self.block_index {
             block_index
         } else {
-            // Fetch next block from iterator; if at EOF in mapping this may be None.
             let next = self.file_blocks.next().await;
             match next {
                 Some(res) => {

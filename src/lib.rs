@@ -354,6 +354,18 @@ impl Ext4 {
         Ok(())
     }
 
+    /// Read a whole block
+    async fn read_block(
+        &self,
+        original_block_index: FsBlockIndex,
+    ) -> Result<Vec<u8>, Ext4Error> {
+        let block_size = self.0.superblock.block_size();
+        let mut block = vec![0; block_size.to_usize()];
+        self.read_from_block(original_block_index, 0, &mut block)
+            .await?;
+        Ok(block)
+    }
+
     /// Write data to a block.
     async fn write_to_block(
         &self,
@@ -637,6 +649,65 @@ impl Ext4 {
 
             // Will never overflow
             bg_id = bg_id.saturating_add(1);
+        }
+        Err(Ext4Error::NoSpace)
+    }
+
+    pub(crate) async fn alloc_blocks(
+        &self,
+        inode_index: InodeIndex,
+        num_blocks: u32,
+    ) -> Result<FsBlockIndex, Ext4Error> {
+        let mut bg_id = (inode_index.get() - 1)
+            / self.0.superblock.inodes_per_block_group();
+        let mut bg_count = self.0.superblock.num_block_groups();
+        let mut rewind = false;
+        while bg_id <= bg_count {
+            if bg_id == bg_count {
+                if rewind {
+                    break;
+                }
+                bg_count = bg_id;
+                bg_id = 0;
+                rewind = true;
+                continue;
+            }
+
+            let bg = self.get_block_group_descriptor(bg_id);
+
+            let free_blocks = bg.free_blocks_count();
+
+            if free_blocks >= num_blocks {
+                let block_bitmap_handle = self.get_block_bitmap_handle(bg_id);
+                let Some(block_num) = block_bitmap_handle
+                    .find_first_n(num_blocks.into(), false, self)
+                    .await?
+                else {
+                    continue;
+                };
+                for i in 0..num_blocks {
+                    block_bitmap_handle
+                        .set(block_num + u32::from(i), true, self)
+                        .await?;
+                }
+                self.update_block_bitmap_checksum(bg_id, block_bitmap_handle)
+                    .await?;
+                bg.set_free_blocks_count(
+                    free_blocks.checked_sub(num_blocks).unwrap(),
+                );
+                bg.write(self).await?;
+                let block_index = (u64::from(bg_id)
+                    * NonZeroU64::from(self.0.superblock.blocks_per_group())
+                        .get())
+                    + u64::from(block_num);
+                // Zero out the new blocks
+                let zeroes = vec![0; self.0.superblock.block_size().to_usize()];
+                for i in 0..num_blocks {
+                    self.write_to_block(block_index + u64::from(i), 0, &zeroes)
+                        .await?;
+                }
+                return Ok(block_index);
+            }
         }
         Err(Ext4Error::NoSpace)
     }

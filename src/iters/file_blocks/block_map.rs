@@ -70,7 +70,7 @@ pub(super) struct BlockMap {
 impl BlockMap {
     const NUM_ENTRIES: usize = 15;
 
-    pub(super) fn new(fs: Ext4, inode: &Inode) -> Self {
+    pub(super) fn new(fs: Ext4, inode: &Inode) -> Result<Self, Ext4Error> {
         let mut level_0 = [0; Self::NUM_ENTRIES];
         for (i, dst) in level_0.iter_mut().enumerate() {
             // OK to unwrap: `i` is at most 14, so the product is at
@@ -79,17 +79,17 @@ impl BlockMap {
             *dst = read_u32le(&inode.inline_data(), src_offset);
         }
 
-        Self {
+        Ok(Self {
+            num_blocks_total: inode.file_size_in_blocks(&fs)?,
             fs,
             level_0,
             num_blocks_yielded: 0,
-            num_blocks_total: inode.file_size_in_blocks(),
             level_0_index: 0,
             level_1: None,
             level_2: None,
             level_3: None,
             is_done: false,
-        }
+        })
     }
 
     #[track_caller]

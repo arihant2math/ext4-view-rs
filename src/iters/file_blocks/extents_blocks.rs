@@ -49,7 +49,7 @@ pub(super) struct ExtentsBlocks {
 
 impl ExtentsBlocks {
     pub(super) fn new(fs: Ext4, inode: &Inode) -> Result<Self, Ext4Error> {
-        let num_blocks_total = inode.file_size_in_blocks();
+        let num_blocks_total = inode.file_size_in_blocks(&fs)?;
 
         Ok(Self {
             extents: Extents::new(fs, inode)?,

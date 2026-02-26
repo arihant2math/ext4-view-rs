@@ -6,11 +6,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use crate::Ext4;
 use crate::block_group::BlockGroupIndex;
 use crate::block_index::FsBlockIndex;
 use crate::checksum::Checksum;
 use crate::error::{CorruptKind, Ext4Error};
+use crate::file_blocks::FileBlocks;
 use crate::file_type::FileType;
 use crate::metadata::Metadata;
 use crate::path::PathBuf;
@@ -19,6 +19,7 @@ use crate::util::{
     read_u16le, read_u32le, u32_from_hilo, u32_to_hilo, u64_from_hilo,
     u64_to_hilo, write_u16le, write_u32le,
 };
+use crate::{Ext4, IncompatibleFeatures};
 use alloc::vec;
 use alloc::vec::Vec;
 use bitflags::bitflags;
@@ -155,10 +156,6 @@ pub struct Inode {
 
     /// Checksum seed used in various places.
     checksum_base: Checksum,
-
-    /// Number of blocks in the file (including holes).
-    // TODO: Don't cache this
-    file_size_in_blocks: u32,
 }
 
 impl Inode {
@@ -197,9 +194,7 @@ impl Inode {
         }
 
         let i_mode = read_u16le(data, 0x0);
-        let i_size_lo = read_u32le(data, 0x4);
         let i_generation = read_u32le(data, 0x64);
-        let i_size_high = read_u32le(data, 0x6c);
         let (l_i_checksum_lo, i_checksum_hi) = if ext4.has_metadata_checksums()
         {
             (
@@ -212,7 +207,6 @@ impl Inode {
             (0, 0)
         };
 
-        let size_in_bytes = u64_from_hilo(i_size_high, i_size_lo);
         let checksum = u32_from_hilo(i_checksum_hi, l_i_checksum_lo);
         let mode = InodeMode::from_bits_retain(i_mode);
 
@@ -220,13 +214,6 @@ impl Inode {
             Checksum::with_seed(ext4.0.superblock.checksum_seed());
         checksum_base.update_u32_le(index.get());
         checksum_base.update_u32_le(i_generation);
-
-        let file_size_in_blocks: u32 = size_in_bytes
-            // Round up.
-            .div_ceil(ext4.0.superblock.block_size().to_u64())
-            // Ext4 allows at most `2^32` blocks in a file.
-            .try_into()
-            .map_err(|_| CorruptKind::TooManyBlocksInFile)?;
 
         Ok((
             Self {
@@ -236,7 +223,6 @@ impl Inode {
                 })?,
                 inode_data: data.to_vec(),
                 checksum_base,
-                file_size_in_blocks,
             },
             checksum,
         ))
@@ -260,7 +246,6 @@ impl Inode {
             file_type: inode_creation_data.file_type,
             inode_data,
             checksum_base,
-            file_size_in_blocks: 0,
         };
 
         inode.set_mode(inode_creation_data.mode)?;
@@ -273,9 +258,24 @@ impl Inode {
         inode.set_dtime(Duration::from_secs(0));
         inode.set_links_count(0);
         let mut flags = inode_creation_data.flags;
-        // TODO: Support extents
-        flags.remove(InodeFlags::EXTENTS);
+        if ext4
+            .0
+            .superblock
+            .incompatible_features()
+            .contains(IncompatibleFeatures::EXTENTS)
+        {
+            flags |= InodeFlags::EXTENTS;
+        } else {
+            flags &= !InodeFlags::EXTENTS;
+            todo!("Support creating inodes without extents");
+        }
         inode.set_flags(flags);
+        let blocks = FileBlocks::initialize(ext4.clone(), &inode)?;
+        let blocks_bytes = blocks.to_bytes();
+        // Pad blocks_bytes to fit in the inline data if necessary, and write it to the inode data.
+        let mut inline_data = [0u8; Self::INLINE_DATA_LEN];
+        inline_data[..blocks_bytes.len()].copy_from_slice(&blocks_bytes);
+        inode.set_inline_data(inline_data);
         inode.write(ext4).await?;
         Ok(inode)
     }
@@ -412,9 +412,14 @@ impl Inode {
     ///
     /// Ext4 allows at most `2^32` blocks in a file. Returns
     /// `CorruptKind::TooManyBlocksInFile` if that limit is exceeded.
-    #[must_use]
-    pub fn file_size_in_blocks(&self) -> u32 {
-        self.file_size_in_blocks
+    pub fn file_size_in_blocks(&self, ext4: &Ext4) -> Result<u32, Ext4Error> {
+        Ok(self
+            .size_in_bytes()
+            // Round up.
+            .div_ceil(ext4.0.superblock.block_size().to_u64())
+            // Ext4 allows at most `2^32` blocks in a file.
+            .try_into()
+            .map_err(|_| CorruptKind::TooManyBlocksInFile)?)
     }
 
     #[must_use]
@@ -426,6 +431,14 @@ impl Inode {
             .unwrap();
         // OK to unwrap, we know `i_block` is 60 bytes.
         i_block.try_into().unwrap()
+    }
+
+    pub(crate) fn set_inline_data(
+        &mut self,
+        data: [u8; Self::INLINE_DATA_LEN],
+    ) {
+        self.inode_data[0x28..0x28 + Self::INLINE_DATA_LEN]
+            .copy_from_slice(&data);
     }
 
     /// Get the inode's mode bits.

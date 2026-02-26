@@ -7,10 +7,10 @@
 // except according to those terms.
 
 use crate::block_index::{FileBlockIndex, FsBlockIndex};
-use crate::util::u64_to_hilo;
+use crate::util::{read_u16le, read_u32le, u64_from_hilo, u64_to_hilo};
 
 /// Contiguous range of blocks that contain file data.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Extent {
     /// Offset of the block within the file.
     pub(crate) block_within_file: FileBlockIndex,
@@ -41,7 +41,17 @@ impl Extent {
         }
     }
 
-    #[expect(unused)]
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Self {
+        let ee_block = read_u32le(bytes, 0);
+        let ee_len = read_u16le(bytes, 4);
+        let ee_start_hi = read_u16le(bytes, 6);
+        let ee_start_low = read_u32le(bytes, 8);
+
+        let start_block = u64_from_hilo(u32::from(ee_start_hi), ee_start_low);
+
+        Extent::new(ee_block, start_block, ee_len)
+    }
+
     pub(crate) fn to_bytes(&self) -> [u8; 12] {
         let mut bytes = [0u8; 12];
         bytes[0..4].copy_from_slice(&self.block_within_file.to_le_bytes());
@@ -53,7 +63,8 @@ impl Extent {
         };
         bytes[4..6].copy_from_slice(&ee_len.to_le_bytes());
         let (ee_start_hi, ee_start_low) = u64_to_hilo(self.start_block);
-        let ee_start_hi = u16::try_from(ee_start_hi).expect("start_block must fit in 48 bits");
+        let ee_start_hi = u16::try_from(ee_start_hi)
+            .expect("start_block must fit in 48 bits");
         bytes[6..8].copy_from_slice(&ee_start_hi.to_le_bytes());
         bytes[8..12].copy_from_slice(&ee_start_low.to_le_bytes());
         bytes

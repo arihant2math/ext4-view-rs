@@ -40,7 +40,7 @@ impl FileBlocks {
                 fs, inode,
             )?)))
         } else {
-            Ok(Self(FileBlocksInner::BlockMap(BlockMap::new(fs, inode))))
+            Ok(Self(FileBlocksInner::BlockMap(BlockMap::new(fs, inode)?)))
         }
     }
 
