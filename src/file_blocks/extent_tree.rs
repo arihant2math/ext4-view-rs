@@ -1170,6 +1170,7 @@ impl ExtentTree {
         &mut self,
         hint_block: FileBlockIndex,
     ) -> Result<(), Ext4Error> {
-        todo!()
+        // TODO: implement
+        Ok(())
     }
 }

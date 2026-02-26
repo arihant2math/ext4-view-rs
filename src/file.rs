@@ -514,10 +514,80 @@ pub async fn write_at(
         buf: &[u8],
         block_size: usize,
     ) -> Result<usize, Ext4Error> {
-        // For a newly allocated extent, we can directly write to the blocks.
-        // If the first or last block is partial, we must zero the unwritten parts to preserve the semantics of uninitialized extents.
-        // This helper should handle both cases and return the number of bytes written.
-        unimplemented!()
+        // Contract:
+        // - `extent` describes newly allocated blocks (no prior file data).
+        // - We must write `buf` starting at `offset_in_block` within the first block.
+        // - Any bytes in the allocated blocks not covered by `buf` must be zeroed, so
+        //   we don't expose stale disk contents.
+        // - Returns the number of bytes from `buf` written.
+
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        if offset_in_block >= block_size {
+            return Ok(0);
+        }
+
+        // How many blocks from this extent are needed to store `buf` starting at
+        // `offset_in_block` in the first block.
+        let first_block_capacity = block_size - offset_in_block;
+        let needed_blocks = if buf.len() <= first_block_capacity {
+            1usize
+        } else {
+            1usize + (buf.len() - first_block_capacity).div_ceil(block_size)
+        };
+
+        // Caller should only pass a slice that fits in the allocated extent, but be
+        // defensive. (Also handles weird zero-length extents.)
+        let extent_blocks = usize::from(extent.num_blocks);
+        let blocks_to_write = core::cmp::min(needed_blocks, extent_blocks);
+        if blocks_to_write == 0 {
+            return Ok(0);
+        }
+
+        let mut written = 0usize;
+
+        for i in 0..blocks_to_write {
+            // Filesystem block corresponding to the i'th block in this extent.
+            #[expect(
+                clippy::arithmetic_side_effects,
+                reason = "Extent start + offset stays within u64 for valid filesystems"
+            )]
+            let fs_block = extent.start_block + i as u64;
+
+            let (block_offset, capacity) = if i == 0 {
+                (offset_in_block, block_size - offset_in_block)
+            } else {
+                (0usize, block_size)
+            };
+
+            // Bytes from `buf` that go into this block.
+            let remaining = buf.len().saturating_sub(written);
+            let take = core::cmp::min(remaining, capacity);
+            if take == 0 {
+                break;
+            }
+
+            let chunk = &buf[written..written + take];
+
+            // If this chunk doesn't fill the entire block from offset 0..block_size,
+            // we must write a full block with zeros everywhere else.
+            let is_full_block_write = block_offset == 0 && take == block_size;
+
+            if is_full_block_write {
+                ext4.write_to_block(fs_block, 0, chunk).await?;
+            } else {
+                // Zero-fill and place the payload at block_offset.
+                let mut block_buf = alloc::vec![0u8; block_size];
+                block_buf[block_offset..block_offset + take]
+                    .copy_from_slice(chunk);
+                ext4.write_to_block(fs_block, 0, &block_buf).await?;
+            }
+
+            written += take;
+        }
+
+        Ok(written)
     }
 
     let block_size = ext4.0.superblock.block_size().to_usize();
@@ -676,19 +746,23 @@ pub async fn write_at(
                 .await?;
 
                 // advance variables
-                let advanced_bytes = bytes_consumed_for_blocks(
-                    tried_blocks,
-                    start_offset_in_block,
-                    block_size,
-                );
+                // We must advance based on how many bytes we actually wrote into the
+                // newly allocated blocks. Advancing by the theoretical block capacity
+                // can underflow `bytes_remaining` when `slice_len` is smaller.
+                let advanced_bytes = slice_len;
                 bytes_remaining -= advanced_bytes;
                 buf_pos += advanced_bytes;
-                current_block =
-                    current_block + FileBlockIndex::from(tried_blocks as u32);
-                start_offset_in_block = 0;
+                current_block = FileBlockIndex::try_from(
+                    (offset + (buf_pos as u64)) / (block_size as u64),
+                )
+                .unwrap();
+                start_offset_in_block = ((offset + (buf_pos as u64))
+                    % (block_size as u64))
+                    as usize;
             }
         }
         // Optional: after each change, try merging adjacent extents to keep tree compact
+        // (Currently unimplemented; safe to skip.)
         extent_tree.try_merge_adjacent(current_block).await?;
     }
 
