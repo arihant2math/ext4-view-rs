@@ -606,6 +606,9 @@ impl Ext4 {
             self.block_block_group_location(block)?;
         let block_bitmap_handle =
             self.get_block_bitmap_handle(block_group_index);
+        if block_bitmap_handle.query(block_offset, self).await? {
+            return Err(Ext4Error::AlreadyExists);
+        }
         block_bitmap_handle.set(block_offset, true, self).await?;
         self.update_block_bitmap_checksum(
             block_group_index,
