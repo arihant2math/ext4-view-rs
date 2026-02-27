@@ -978,8 +978,8 @@ impl ExtentTree {
                 return Err(Ext4Error::NoSpace);
             }
 
-            let left_len_u32 = (split_block_within_file - start) as u32;
-            let right_len_u32 = (end - split_block_within_file) as u32;
+            let left_len_u32 = split_block_within_file - start;
+            let right_len_u32 = end - split_block_within_file;
             let left_len: u16 = u16::try_from(left_len_u32)
                 .map_err(|_| CorruptKind::ExtentBlock(inode))?;
             let right_len: u16 = u16::try_from(right_len_u32)
@@ -1061,7 +1061,7 @@ impl ExtentTree {
         // `node` is now the leaf node that should contain the extent.
         let leaf_block = node
             .block
-            .ok_or_else(|| CorruptKind::ExtentBlock(self.inode))?;
+            .ok_or(CorruptKind::ExtentBlock(self.inode))?;
 
         let old_first = match &node.entries {
             ExtentNodeEntries::Leaf(extents) => extents.first().copied(),
