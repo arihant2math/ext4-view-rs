@@ -433,7 +433,8 @@ impl Ext4 {
     ) -> &BlockGroupDescriptor {
         assert!(
             usize_from_u32(block_group_index)
-                < self.0.block_group_descriptors.len()
+                < self.0.block_group_descriptors.len(),
+            "Block group index out of bounds: {block_group_index}"
         );
         &self.0.block_group_descriptors[usize_from_u32(block_group_index)]
     }
