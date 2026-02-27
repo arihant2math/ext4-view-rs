@@ -335,10 +335,14 @@ pub async fn init_directory(
     // When metadata checksums are enabled, leaf blocks include a 12-byte tail.
     // Our `DirBlock` helper will compute/update the checksum using everything
     // except the tail, so ensure entries don't overlap it.
-    let tail_size = if fs.has_metadata_checksums() { 12usize } else { 0usize };
-    let usable = block_size
-        .checked_sub(tail_size)
-        .ok_or_else(|| Ext4Error::from(CorruptKind::DirEntry(dir_inode.index)))?;
+    let tail_size = if fs.has_metadata_checksums() {
+        12usize
+    } else {
+        0usize
+    };
+    let usable = block_size.checked_sub(tail_size).ok_or_else(|| {
+        Ext4Error::from(CorruptKind::DirEntry(dir_inode.index))
+    })?;
 
     let dot = DirEntryName::try_from(".").expect("valid dir entry name");
     let dotdot = DirEntryName::try_from("..").expect("valid dir entry name");
@@ -360,9 +364,9 @@ pub async fn init_directory(
 
     // '..' entry consumes the remainder of the usable area.
     let dotdot_off = dot_len;
-    let dotdot_rec_len = usable
-        .checked_sub(dotdot_off)
-        .ok_or_else(|| Ext4Error::from(CorruptKind::DirEntry(dir_inode.index)))?;
+    let dotdot_rec_len = usable.checked_sub(dotdot_off).ok_or_else(|| {
+        Ext4Error::from(CorruptKind::DirEntry(dir_inode.index))
+    })?;
 
     write_dir_entry_bytes(
         &mut block_buf,

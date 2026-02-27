@@ -93,6 +93,20 @@ pub trait AsyncIterator {
         }
         None
     }
+
+    /// Equivalent to [`Iterator::all`]
+    async fn all<F>(mut self, mut f: F) -> bool
+    where
+        Self: Sized,
+        F: FnMut(<Self as AsyncIterator>::Item) -> bool,
+    {
+        while let Some(item) = self.next().await {
+            if !f(item) {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 /// Equivalent to [`Iterator::map`]

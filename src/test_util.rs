@@ -15,8 +15,8 @@ use core::fmt::{Display, Formatter};
 use std::error::Error as StdError;
 use std::fmt;
 use std::ops::Deref;
-use std::sync::{Arc, Mutex};
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 // Simple error for MemWriter failures.
 #[derive(Debug)]
@@ -90,7 +90,9 @@ pub(crate) async fn load_compressed_filesystem(name: &str) -> Ext4 {
 }
 
 /// Decompress a file with zstd, then load it into an `Ext4`.
-pub(crate) async fn load_compressed_filesystem_rw(name: &str) -> (Ext4, Arc<Mutex<Vec<u8>>>) {
+pub(crate) async fn load_compressed_filesystem_rw(
+    name: &str,
+) -> (Ext4, Arc<Mutex<Vec<u8>>>) {
     // This function executes quickly, so don't bother caching.
     let output = std::process::Command::new("zstd")
         .args([
@@ -108,7 +110,10 @@ pub(crate) async fn load_compressed_filesystem_rw(name: &str) -> (Ext4, Arc<Mute
     let reader = Box::new(MemRw(shared.clone())) as Box<dyn Ext4Read>;
     let writer = Some(Box::new(MemRw(shared.clone())) as Box<dyn Ext4Write>);
 
-    (Ext4::load_with_writer(reader, writer).await.unwrap(), shared)
+    (
+        Ext4::load_with_writer(reader, writer).await.unwrap(),
+        shared,
+    )
 }
 
 pub(crate) async fn load_test_disk1() -> Ext4 {
@@ -143,7 +148,6 @@ pub(crate) async fn load_test_disk1_rw_no_fsck() -> Ext4 {
     load_compressed_filesystem_rw("test_disk1.bin.zst").await.0
 }
 
-
 /// Validate that the provided filesystem image is a consistent ext4 filesystem by
 /// invoking `fsck.ext4`.
 ///
@@ -160,12 +164,11 @@ pub(crate) fn fsck_ext4_arc_image(image: &Arc<Mutex<Vec<u8>>>) {
         return;
     }
 
-    let bytes = {
-        image.lock().unwrap().clone()
-    };
+    let bytes = { image.lock().unwrap().clone() };
 
     let mut tmp = tempfile::NamedTempFile::new().expect("create temp file");
-    std::io::Write::write_all(&mut tmp, &bytes).expect("write filesystem image");
+    std::io::Write::write_all(&mut tmp, &bytes)
+        .expect("write filesystem image");
     tmp.as_file().sync_all().expect("sync filesystem image");
 
     fsck_ext4_path(tmp.path());
@@ -178,9 +181,7 @@ fn fsck_ext4_path(path: &Path) {
     let path_str = path.to_string_lossy();
     let args = ["-f", "-n", path_str.as_ref()];
 
-    let local = std::process::Command::new("fsck.ext4")
-        .args(args)
-        .output();
+    let local = std::process::Command::new("fsck.ext4").args(args).output();
 
     if let Ok(output) = local {
         if output.status.success() {

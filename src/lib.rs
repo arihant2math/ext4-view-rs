@@ -1267,7 +1267,8 @@ impl Ext4 {
         if target.as_ref().len() <= 60 {
             // Fast symlink: store the target in the inode itself.
             let mut target_bytes = [0; 60];
-            target_bytes[..target.as_ref().len()].copy_from_slice(target.as_ref());
+            target_bytes[..target.as_ref().len()]
+                .copy_from_slice(target.as_ref());
             inode.set_inline_data(target_bytes);
             inode.set_size_in_bytes(target.as_ref().len() as u64);
             inode.set_flags(InodeFlags::INLINE_DATA);

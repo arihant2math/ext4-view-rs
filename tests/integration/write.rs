@@ -271,9 +271,14 @@ async fn test_multi_block_write() {
     let data = vec![b'A'; 10000];
     let mut total_written = 0;
     while total_written < data.len() {
-        let n = write_at(&fs, &mut inode, &data[total_written..], total_written as u64)
-            .await
-            .unwrap();
+        let n = write_at(
+            &fs,
+            &mut inode,
+            &data[total_written..],
+            total_written as u64,
+        )
+        .await
+        .unwrap();
         assert!(n > 0);
         total_written += n;
     }
