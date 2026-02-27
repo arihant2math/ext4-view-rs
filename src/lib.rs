@@ -1243,6 +1243,7 @@ impl Ext4 {
         inner(self, parent_inode, name, inode).await
     }
 
+    /// Create a symbolic link at `path` pointing to `target`.
     pub async fn symlink(
         &self,
         parent_inode: &Inode,
